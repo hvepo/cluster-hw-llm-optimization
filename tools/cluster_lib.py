@@ -3,9 +3,15 @@
 import json
 import os
 import platform
+import re
+import shutil
 import subprocess
 import urllib.error
 import urllib.request
+
+_WIN_DRIVE_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
+_WSL_UNC_RE = re.compile(r"^(?:\\\\|//)(?:wsl\.localhost|wsl\$)[\\/][^\\/]+([\\/].*)?$", re.IGNORECASE)
+_MNT_DRIVE_RE = re.compile(r"^/mnt/([a-zA-Z])(?:/(.*))?$")
 
 
 def detect_platform():
@@ -24,8 +30,118 @@ def detect_platform():
     return "linux"
 
 
+def resolve_host_binary(name):
+    """Locate host binaries (nvidia-smi, powershell.exe, cmd.exe, wsl.exe, wslpath) even under stripped IDE MCP PATHs."""
+    found = shutil.which(name)
+    if found:
+        return found
+    plat = detect_platform()
+    low = name.lower()
+    candidates = []
+    if low in ("nvidia-smi", "nvidia-smi.exe"):
+        if plat == "wsl":
+            candidates = [
+                "/usr/lib/wsl/lib/nvidia-smi",
+                "/usr/bin/nvidia-smi",
+                "/mnt/c/Windows/System32/nvidia-smi.exe",
+                "/mnt/c/Program Files/NVIDIA Corporation/NVSMI/nvidia-smi.exe",
+            ]
+        elif plat == "windows":
+            sysroot = os.environ.get("SystemRoot") or r"C:\Windows"
+            pfiles = os.environ.get("ProgramFiles") or r"C:\Program Files"
+            candidates = [
+                os.path.join(sysroot, "System32", "nvidia-smi.exe"),
+                os.path.join(pfiles, "NVIDIA Corporation", "NVSMI", "nvidia-smi.exe"),
+            ]
+        else:
+            candidates = ["/usr/bin/nvidia-smi", "/usr/local/bin/nvidia-smi"]
+    elif low in ("powershell.exe", "powershell"):
+        if plat == "wsl":
+            candidates = [
+                "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+                "/mnt/c/Program Files/PowerShell/7/pwsh.exe",
+            ]
+        elif plat == "windows":
+            sysroot = os.environ.get("SystemRoot") or r"C:\Windows"
+            pfiles = os.environ.get("ProgramFiles") or r"C:\Program Files"
+            candidates = [
+                os.path.join(sysroot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+                os.path.join(pfiles, "PowerShell", "7", "pwsh.exe"),
+            ]
+    elif low in ("cmd.exe", "cmd"):
+        if plat == "wsl":
+            candidates = ["/mnt/c/Windows/System32/cmd.exe"]
+        elif plat == "windows":
+            sysroot = os.environ.get("SystemRoot") or r"C:\Windows"
+            candidates = [os.path.join(sysroot, "System32", "cmd.exe")]
+    elif low in ("wsl.exe", "wsl"):
+        if plat == "windows":
+            sysroot = os.environ.get("SystemRoot") or r"C:\Windows"
+            candidates = [os.path.join(sysroot, "System32", "wsl.exe")]
+        elif plat == "wsl":
+            candidates = ["/mnt/c/Windows/System32/wsl.exe"]
+    elif low == "wslpath":
+        candidates = ["/usr/bin/wslpath", "/bin/wslpath"]
+
+    for cand in candidates:
+        if os.path.isfile(cand):
+            return cand
+    return name
+
+
+def normalize_local_path(raw_path, target_plat=None):
+    """Translate a filesystem path across Windows <-> WSL/POSIX boundaries for the current (or target) platform."""
+    if not raw_path:
+        return raw_path
+    p = str(raw_path).strip()
+    if not p:
+        return p
+    plat = target_plat or detect_platform()
+
+    if plat in ("wsl", "linux", "macos"):
+        m_unc = _WSL_UNC_RE.match(p)
+        if m_unc:
+            tail = (m_unc.group(1) or "/").replace("\\", "/")
+            return tail if tail.startswith("/") else "/" + tail
+        m_drv = _WIN_DRIVE_RE.match(p)
+        if m_drv:
+            drv = m_drv.group(1).lower()
+            rest = m_drv.group(2).replace("\\", "/").lstrip("/")
+            return f"/mnt/{drv}/{rest}" if rest else f"/mnt/{drv}"
+        return p
+
+    if plat == "windows":
+        m_mnt = _MNT_DRIVE_RE.match(p)
+        if m_mnt:
+            drv = m_mnt.group(1).upper()
+            rest = (m_mnt.group(2) or "").replace("/", "\\")
+            return f"{drv}:\\{rest}" if rest else f"{drv}:\\"
+        if p.startswith("/"):
+            distro = os.environ.get("WSL_DISTRO_NAME")
+            if not distro:
+                try:
+                    wsl_bin = resolve_host_binary("wsl.exe")
+                    w = subprocess.check_output(
+                        [wsl_bin, "-e", "wslpath", "-w", p],
+                        stdin=subprocess.DEVNULL,
+                        text=True,
+                        stderr=subprocess.DEVNULL,
+                        timeout=5,
+                    ).strip()
+                    if w:
+                        return w
+                except Exception:
+                    distro = "Ubuntu"
+            if distro:
+                rel = p.lstrip("/").replace("/", "\\")
+                return f"\\\\wsl.localhost\\{distro}\\{rel}"
+        return p
+
+    return p
+
+
 def find_repo_root(start=None):
-    env_root = os.environ.get("CLUSTER_REPO_ROOT")
+    env_root = normalize_local_path(os.environ.get("CLUSTER_REPO_ROOT"))
     if env_root and os.path.isdir(env_root):
         return os.path.abspath(env_root)
 
@@ -34,7 +150,7 @@ def find_repo_root(start=None):
         marker = os.path.join(candidate, "repo_root.txt")
         if os.path.isfile(marker):
             with open(marker, "r", encoding="utf-8") as f:
-                p = f.read().strip()
+                p = normalize_local_path(f.read().strip())
             if p and os.path.isdir(p):
                 return os.path.abspath(p)
         if os.path.isfile(os.path.join(candidate, "cluster.example.json")):
@@ -56,15 +172,16 @@ def _win_userprofile_from_wsl():
     if os.environ.get("CLUSTER_WIN_HOME"):
         return os.environ["CLUSTER_WIN_HOME"]
     try:
+        cmd_bin = resolve_host_binary("cmd.exe")
         out = subprocess.check_output(
-            ["cmd.exe", "/c", "echo", "%USERPROFILE%"],
+            [cmd_bin, "/c", "echo", "%USERPROFILE%"],
             stdin=subprocess.DEVNULL,
             text=True,
             stderr=subprocess.DEVNULL,
             timeout=5,
         ).strip()
         if out and "%" not in out:
-            return subprocess.check_output(["wslpath", "-u", out], text=True, timeout=5).strip()
+            return normalize_local_path(out, "wsl")
     except Exception:
         pass
     return None

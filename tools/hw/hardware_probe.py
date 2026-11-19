@@ -13,7 +13,13 @@ import sys
 
 TOOLS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, TOOLS_DIR)
-from cluster_lib import detect_platform, load_cluster_config, resolve_afterburner_cfg, resolve_local_lmstudio_home  # noqa: E402
+from cluster_lib import (  # noqa: E402
+    detect_platform,
+    load_cluster_config,
+    resolve_afterburner_cfg,
+    resolve_host_binary,
+    resolve_local_lmstudio_home,
+)
 
 
 def run_ps_probe(days=14):
@@ -68,7 +74,8 @@ $res = [PSCustomObject]@{{
 $res | ConvertTo-Json -Depth 6 -Compress
 exit 0
 """
-    r = subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps], stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=40)
+    ps_bin = resolve_host_binary("powershell.exe")
+    r = subprocess.run([ps_bin, "-NoProfile", "-Command", ps], stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=40)
     if r.returncode != 0 or not r.stdout.strip():
         return {"error": (r.stderr or r.stdout).strip()}
     return json.loads(r.stdout.strip().splitlines()[-1])
@@ -76,12 +83,14 @@ exit 0
 
 def query_nvidia_gpu():
     try:
+        smi = resolve_host_binary("nvidia-smi")
         out = subprocess.check_output(
             [
-                "nvidia-smi",
+                smi,
                 "--query-gpu=name,driver_version,pstate,clocks.gr,clocks.mem,clocks.max.mem,memory.total,memory.used,power.draw,power.limit,temperature.gpu,clocks_event_reasons.active,pcie.link.gen.current,pcie.link.gen.max,pcie.link.width.current,pcie.link.width.max",
                 "--format=csv,noheader,nounits",
             ],
+            stdin=subprocess.DEVNULL,
             text=True,
             stderr=subprocess.DEVNULL,
             timeout=5,
@@ -91,7 +100,7 @@ def query_nvidia_gpu():
         p = [x.strip() for x in out.splitlines()[0].split(",")]
         bar1_mib = None
         try:
-            q = subprocess.check_output(["nvidia-smi", "-q", "-d", "MEMORY"], text=True, stderr=subprocess.DEVNULL, timeout=5)
+            q = subprocess.check_output([smi, "-q", "-d", "MEMORY"], stdin=subprocess.DEVNULL, text=True, stderr=subprocess.DEVNULL, timeout=5)
             lines = q.splitlines()
             for idx, ln in enumerate(lines):
                 if "BAR1 Memory Usage" in ln and idx + 1 < len(lines):

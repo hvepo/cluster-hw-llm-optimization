@@ -17,6 +17,7 @@ import re
 import socket
 import subprocess
 import sys
+import tempfile
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 EXPECTED_SKILLS = {"hw-node-profiler", "llm-node-finetune", "cluster-install-migrate"}
@@ -206,6 +207,123 @@ def check_hooks():
     print("[PASS] Hook contracts verified (PreToolUse deny/ask/allow + SessionStart)")
 
 
+def check_install_matrix():
+    sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
+    import cluster_lib
+
+    # 1. Cross-OS path normalization tests
+    assert cluster_lib.normalize_local_path(r"C:\Users\Demo\repo", "wsl") == "/mnt/c/Users/Demo/repo"
+    assert cluster_lib.normalize_local_path(r"\\wsl.localhost\Ubuntu\home\demo\repo", "wsl") == "/home/demo/repo"
+    assert cluster_lib.normalize_local_path("/mnt/d/work/repo", "windows") == r"D:\work\repo"
+
+    install_script = os.path.join(REPO_ROOT, "scripts", "install.py")
+    with tempfile.TemporaryDirectory() as tmp:
+        posix_home = os.path.join(tmp, "posix_home")
+        win_home = os.path.join(tmp, "win_home")
+        win_appdata = os.path.join(win_home, "AppData", "Roaming")
+        os.makedirs(posix_home, exist_ok=True)
+        os.makedirs(win_appdata, exist_ok=True)
+
+        # Pre-seed existing third-party MCP servers to ensure non-destructive merge
+        for mcp_p in (
+            os.path.join(posix_home, ".config", "Code", "User", "mcp.json"),
+            os.path.join(posix_home, ".vscode-server", "data", "User", "mcp.json"),
+            os.path.join(win_appdata, "Code", "User", "mcp.json"),
+        ):
+            os.makedirs(os.path.dirname(mcp_p), exist_ok=True)
+            with open(mcp_p, "w", encoding="utf-8") as f:
+                json.dump({"inputs": ["keep"], "servers": {"other-srv": {"type": "stdio", "command": "node"}}}, f)
+
+        for oc_p in (
+            os.path.join(posix_home, ".config", "opencode", "opencode.json"),
+            os.path.join(win_home, ".config", "opencode", "opencode.json"),
+        ):
+            os.makedirs(os.path.dirname(oc_p), exist_ok=True)
+            with open(oc_p, "w", encoding="utf-8") as f:
+                json.dump({"theme": "dark", "mcp": {"servers": {"other-oc": {"type": "local", "command": ["node"]}}}}, f)
+
+        env = dict(os.environ)
+        env["CLUSTER_INSTALL_POSIX_HOME"] = posix_home
+        env["CLUSTER_INSTALL_WIN_HOME"] = win_home
+        env["CLUSTER_INSTALL_WIN_APPDATA"] = win_appdata
+        env["CLUSTER_INSTALL_SKIP_CONFIG"] = "1"
+
+        # 2. Install across both Windows and WSL for all 3 targets (agy, vscode, opencode)
+        r = subprocess.run(
+            [sys.executable, install_script, "--os", "windows,wsl", "--targets", "agy,vscode,opencode", "--scope", "user"],
+            stdin=subprocess.DEVNULL,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+        )
+        assert r.returncode == 0, f"Matrix install failed: {r.stderr or r.stdout}"
+
+        for home_root in (posix_home, win_home):
+            agy_dir = os.path.join(home_root, ".gemini", "config", "plugins", "cluster-hw-llm-optimization")
+            assert os.path.isfile(os.path.join(agy_dir, "plugin.json"))
+            assert os.path.isfile(os.path.join(agy_dir, "mcp_config.json"))
+            assert os.path.isfile(os.path.join(agy_dir, "hooks.json"))
+            assert os.path.isfile(os.path.join(agy_dir, "repo_root.txt"))
+            assert set(os.listdir(os.path.join(agy_dir, "skills"))) == EXPECTED_SKILLS
+            assert set(os.listdir(os.path.join(home_root, ".copilot", "skills"))) == EXPECTED_SKILLS
+            assert set(os.listdir(os.path.join(home_root, ".config", "opencode", "skills"))) == EXPECTED_SKILLS
+            oc_data = json.load(open(os.path.join(home_root, ".config", "opencode", "opencode.json"), encoding="utf-8"))
+            assert oc_data.get("theme") == "dark"
+            assert "other-oc" in oc_data["mcp"]["servers"]
+            assert "cluster-hw-llm" in oc_data["mcp"]["servers"]
+
+        for mcp_p in (
+            os.path.join(posix_home, ".config", "Code", "User", "mcp.json"),
+            os.path.join(posix_home, ".vscode-server", "data", "User", "mcp.json"),
+            os.path.join(win_appdata, "Code", "User", "mcp.json"),
+        ):
+            vd = json.load(open(mcp_p, encoding="utf-8"))
+            assert vd.get("inputs") == ["keep"]
+            assert "other-srv" in vd["servers"]
+            assert "cluster-hw-llm" in vd["servers"]
+
+        # 3. Test Windows WSL-Python fallback mode (--win-use-wsl-python)
+        r_fb = subprocess.run(
+            [sys.executable, install_script, "--os", "windows", "--targets", "all", "--scope", "user", "--win-use-wsl-python"],
+            stdin=subprocess.DEVNULL,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+        )
+        assert r_fb.returncode == 0, f"WSL-Python fallback install failed: {r_fb.stderr}"
+        win_vsc = json.load(open(os.path.join(win_appdata, "Code", "User", "mcp.json"), encoding="utf-8"))
+        assert win_vsc["servers"]["cluster-hw-llm"]["command"] == "wsl.exe"
+        win_oc = json.load(open(os.path.join(win_home, ".config", "opencode", "opencode.json"), encoding="utf-8"))
+        assert win_oc["mcp"]["servers"]["cluster-hw-llm"]["command"][0] == "wsl.exe"
+
+        # 4. Test clean uninstall across both Windows and WSL
+        r_un = subprocess.run(
+            [sys.executable, install_script, "--os", "windows,wsl", "--targets", "all", "--scope", "user", "--uninstall"],
+            stdin=subprocess.DEVNULL,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+        )
+        assert r_un.returncode == 0, f"Matrix uninstall failed: {r_un.stderr}"
+        for home_root in (posix_home, win_home):
+            assert not os.path.exists(os.path.join(home_root, ".gemini", "config", "plugins", "cluster-hw-llm-optimization"))
+            oc_data = json.load(open(os.path.join(home_root, ".config", "opencode", "opencode.json"), encoding="utf-8"))
+            assert "other-oc" in oc_data["mcp"]["servers"]
+            assert "cluster-hw-llm" not in oc_data["mcp"]["servers"]
+        for mcp_p in (
+            os.path.join(posix_home, ".config", "Code", "User", "mcp.json"),
+            os.path.join(win_appdata, "Code", "User", "mcp.json"),
+        ):
+            vd = json.load(open(mcp_p, encoding="utf-8"))
+            assert "other-srv" in vd["servers"]
+            assert "cluster-hw-llm" not in vd["servers"]
+
+    print("[PASS] Install/Uninstall matrix verified across {windows, wsl} x {agy, vscode, opencode} + wsl.exe fallback")
+
+
 def check_privacy(files):
     generic_patterns = [
         ("tailscale_cgnat_ip", re.compile(r"\b100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b")),
@@ -265,6 +383,7 @@ def main():
         mcp_roundtrip("ndjson", live=False)
         mcp_roundtrip("lsp", live=False)
         check_hooks()
+        check_install_matrix()
     if args.check_privacy:
         check_privacy(files)
     if args.live:

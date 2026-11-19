@@ -13,18 +13,21 @@ from cluster_lib import (
     load_cluster_config,
     node_for_model,
     node_url,
+    resolve_host_binary,
     resolve_lms_cli,
 )
 
 
 def query_nvidia_gpu():
     try:
+        smi = resolve_host_binary("nvidia-smi")
         out = subprocess.check_output(
             [
-                "nvidia-smi",
+                smi,
                 "--query-gpu=name,clocks.gr,clocks.mem,clocks.max.mem,power.draw,power.limit,temperature.gpu,clocks_event_reasons.active",
                 "--format=csv,noheader,nounits",
             ],
+            stdin=subprocess.DEVNULL,
             text=True,
             stderr=subprocess.DEVNULL,
             timeout=5,

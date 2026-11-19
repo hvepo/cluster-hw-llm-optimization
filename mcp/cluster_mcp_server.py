@@ -120,7 +120,8 @@ def check_events_hours(hours=24):
         "$items = $ev | Select-Object @{n='time';e={$_.TimeCreated.ToString('o')}}, Id, LevelDisplayName, ProviderName, Message; "
         "@{count=$ev.Count; events=@($items)} | ConvertTo-Json -Depth 4 -Compress; exit 0"
     )
-    r = subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps], stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=30)
+    ps_bin = cluster_lib.resolve_host_binary("powershell.exe")
+    r = subprocess.run([ps_bin, "-NoProfile", "-Command", ps], stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=30)
     if r.returncode != 0 or not r.stdout.strip():
         return {"error": (r.stderr or r.stdout).strip()}
     return json.loads(r.stdout.strip().splitlines()[-1])

@@ -2,7 +2,7 @@
 
 **Hardware, BIOS & Driver Node Profiler + Per-Node Local LLM Serving Fine-Tuner** for inspecting the hardware configuration of **any cluster device** (CPU, motherboard/BIOS, RAM/DOCP, discrete or unified GPUs, chipset/platform drivers, power plan, Event Log stability) and then **fine-tuning (hill-climbing) local LLM serving parameters** specifically for that cluster node.
 
-Works across **Windows (`Antigravity`, `VS Code`)** and **Ubuntu WSL / Linux (`Antigravity`, `VS Code Remote`, `OpenCode`, `Claude Code`)** with zero external Python/Node dependencies.
+Works across **any combination** of **Windows**, **Ubuntu WSL**, and **Linux** with **Antigravity (`agy`)**, **VS Code (`vscode`)**, and **OpenCode (`opencode`)** (plus Claude Code via `AGENTS.md`), with zero external Python/Node dependencies.
 
 > Derived in part from [sybil-solutions/inference-optimisation-skill](https://github.com/sybil-solutions/inference-optimisation-skill) (MIT), expanded with universal hardware/BIOS/driver profiling (`tools/hw/hardware_probe.py`), GPU undervolt + VRAM OC verification, CPU Per-Core Curve Optimizer stress suites, fixed linear multi-stream `ceiling.py` math, default-preserving LM Studio controllers, a zero-dependency Stdio MCP server, lifecycle safety hooks, and cross-OS installers.
 
@@ -57,16 +57,21 @@ Full methodology and per-model tables in [docs/BENCHMARKS.md](docs/BENCHMARKS.md
 
 ---
 
-## Quick Start & Migration (Any Node Name)
+## Quick Start & Migration (Any OS × Client Combination)
 
-### Ubuntu WSL / Linux
+### Ubuntu WSL / Linux (auto-bridges to Windows host on dual Windows+WSL machines)
 ```bash
-bash install.sh --node <node_name> --targets agy,opencode,vscode --doctor
+bash install.sh --node <node_name> --os auto --targets agy,opencode,vscode --doctor
 ```
 
-### Windows PowerShell
+### Windows PowerShell (auto-bridges to WSL when available, or falls back to WSL Python)
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Node <node_name> -Targets agy,vscode -Doctor
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Node <node_name> -Os auto -Targets agy,opencode,vscode -Doctor
+```
+
+### Specific Combinations (`--os windows|wsl|linux|all` × `--targets agy,vscode,opencode`)
+```bash
+python3 scripts/install.py --os windows,wsl --targets agy,vscode,opencode --doctor
 ```
 
 ### Self-Test & Privacy Gate
