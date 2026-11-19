@@ -1,0 +1,17 @@
+# Local machine config, endpoints, hostnames, IPs, and paths (NEVER commit)
+cluster.local.json
+*.local.json
+repo_root.txt
+
+# Benchmark logs, raw ledgers, temporary states, backups
+ledger.jsonl
+runs-*.log
+*.log
+backup/
+backup-*/
+.lmctl_temp_configs.json
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+Thumbs.db

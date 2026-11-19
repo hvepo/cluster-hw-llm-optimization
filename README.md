@@ -1,0 +1,81 @@
+# cluster-hw-llm-optimization
+
+**Hardware, BIOS & Driver Node Profiler + Per-Node Local LLM Serving Fine-Tuner** for inspecting the hardware configuration of **any cluster device** (CPU, motherboard/BIOS, RAM/DOCP, discrete or unified GPUs, chipset/platform drivers, power plan, Event Log stability) and then **fine-tuning (hill-climbing) local LLM serving parameters** specifically for that cluster node.
+
+Works across **Windows (`Antigravity`, `VS Code`)** and **Ubuntu WSL / Linux (`Antigravity`, `VS Code Remote`, `OpenCode`, `Claude Code`)** with zero external Python/Node dependencies.
+
+> Derived in part from [sybil-solutions/inference-optimisation-skill](https://github.com/sybil-solutions/inference-optimisation-skill) (MIT), expanded with universal hardware/BIOS/driver profiling (`tools/hw/hardware_probe.py`), GPU undervolt + VRAM OC verification, CPU Per-Core Curve Optimizer stress suites, fixed linear multi-stream `ceiling.py` math, default-preserving LM Studio controllers, a zero-dependency Stdio MCP server, lifecycle safety hooks, and cross-OS installers.
+
+---
+
+## Two-Phase Workflow (Any Cluster Node)
+
+```text
+Phase 1: Understand & Certify the Target Cluster Device (hw-node-profiler)
+  tools/hw/hardware_probe.py [--node <name>] [--hwinfo <export.json>]
+  tools/hw/{bw_test.py, gpu_oc_verify.py, cpu_co_stress.py, stress_suite.py}
+        │
+        ▼  verified hardware profile: real bandwidth, VRAM/unified cap, BIOS/driver/power health
+Phase 2: Fine-Tune LLM Serving Parameters for That Node (llm-node-finetune)
+  tools/llm/{ceiling.py, lmctl_bench.py, bench.py, queue.sh, run_gates.py}
+        │
+        ▼  persisted optimal per-model configs in profiles/<node>/ + profiles/best-config.json
+```
+
+---
+
+## Verified Node Reference Results
+
+Full methodology and per-model tables in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and [profiles/best-config.json](profiles/best-config.json):
+
+### 1. Hardware, BIOS & Driver Optimization
+- **Desktop CUDA Node (`torre` — `RTX 3080 Ti` 12 GiB + `Ryzen 9 5950X` + `32 GiB DDR4-3600 CL14`):**
+  - **BIOS & CPU Per-Core Curve Optimizer:** Correlated Windows `WHEA 18` (`APIC ID 6/7`) with HWiNFO64 CPPC rankings (`Core 3 -> 0`, other star cores `-5`, rest `-10`), updated AMD X570 Chipset drivers (`8.09.28.1124` + `Ryzen Balanced`), switched Windows Power Plan to `Balanced` (`MinCPU 0%`, `ASPM Off`), and certified stability with `tools/hw/stress_suite.py` (`0` `WHEA 18/19`, `0` `nvlddmkm 153`).
+  - **GPU Undervolt + VRAM OC (`tools/hw/gpu_oc_verify.py`):** Flattened MSI Afterburner V/F curve (`1,770 MHz @ 875 mV`, flat `1,785 MHz` ceiling through `1,237.5 mV`, `+500 MHz` GDDR6X `10,001 MHz`, `350 W` PL) raised CUDA D2D bandwidth from `788.48` -> **`831.81 GB/s`** post-stress (`0` throttle flags, `3 °C` cooler).
+- **Unified iGPU Laptop Node (`portatil` — `Core Ultra 7 258V` + `Intel Arc 140V` + `32 GiB LPDDR5x-8533`):**
+  - Configured `75%` (`~24 GiB`) Shared GPU Memory Override so `30B-A3B` and `26B-A4B` MoE models fit 100% in unified iGPU memory.
+
+### 2. Per-Node LLM Serving Fine-Tuning (`12 LLMs + 2 Embeddings`)
+- **`torre` (`12 GiB RTX 3080 Ti`):**
+  - `t-code-chat` (`Qwen2.5-Coder-14B Q4_K_M`, `8K, p=2, q8_0, pbs=2048`): `18.43` -> `60.34` stock -> **`71.12 tok/s c1` (`128.53 c2`)** under GPU UV+OC (**3.86× speedup**), `2K` prefill `188.5 -> 2,069.6 tok/s`, `3/3` needle @ 50%/100%.
+  - `t-vision-context` (`Gemma-4-12B-IT + MTP-3`, `16K, q8_0, ckpt=0`): `34.07` -> `97.69` stock -> **`107.44 tok/s c1` (`143.76 c2`, `2,505.6 pre8K`)** under UV+OC (**3.15× speedup**).
+  - `t-fast-agent` (`Qwen3-8B`, `16K, p=4`): **`127.35 c1 / 323.01 c4`** (alt `q8_0` co-resides with `t-autocomplete-tab` `17.8 ms` FIM + `text-embedding-t-embed-index` in **`10.05 GiB`** VRAM).
+  - `t-math-physics` (`Phi-4 14B`): solved `phi3` CUDA `v=q8_0` crash via **split KV (`K=q8_0:V=f16`)** -> `63.42 c1 / 118.41 c2`.
+- **`portatil` (`24 GiB Intel Arc 140V`):**
+  - Eliminated `100–125s` slot-0 checkpoint stalls (`flash_attention=true`, `ckpt=0` on `p-agent-moe-alt`): **12×–26× faster cold prefill** (`11–18` -> `134–495 tok/s`), `30B-A3B MoE` at `26–27 tok/s c1 / 37–39 c4` with `3/3` long-context needle recall.
+
+---
+
+## Agentic Stack (Antigravity · VS Code · OpenCode · Claude Code)
+
+| Component | Path | Purpose |
+|---|---|---|
+| **Skills (3)** | `skills/{hw-node-profiler,llm-node-finetune,cluster-install-migrate}` | Phase 1 hardware/BIOS/driver profiling, Phase 2 per-node LLM fine-tuning, and cross-OS migration |
+| **Stdio MCP Server (7 tools, 3 resources)** | `mcp/cluster_mcp_server.py` (`cluster-hw-llm`) | `hw_node_profile` · `hw_gpu_telemetry` · `hw_event_log_check` · `llm_compute_ceiling` · `node_llm_status` · `node_best_configs` · `node_llm_control` |
+| **Antigravity Plugin & Hooks** | `plugins/cluster-hw-llm-optimization/` | `PreToolUse` default-config & LM Link safety guard + `SessionStart` node context |
+| **Universal Rules** | `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md` | Cross-agent hardware & LLM benchmarking guardrails |
+
+---
+
+## Quick Start & Migration (Any Node Name)
+
+### Ubuntu WSL / Linux
+```bash
+bash install.sh --node <node_name> --targets agy,opencode,vscode --doctor
+```
+
+### Windows PowerShell
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Node <node_name> -Targets agy,vscode -Doctor
+```
+
+### Self-Test & Privacy Gate
+```bash
+python3 scripts/doctor.py --all --check-privacy
+python3 scripts/doctor.py --all --check-privacy --live
+```
+
+See [docs/MIGRATION.md](docs/MIGRATION.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and [PROMPT.md](PROMPT.md) for copy-ready hardware profiling and LLM fine-tuning prompts.
+
+## License
+MIT ([LICENSE](LICENSE)) — retains upstream MIT notice for `sybil-solutions/inference-optimisation-skill`.

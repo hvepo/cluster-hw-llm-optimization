@@ -1,0 +1,12 @@
+{
+  "name": "cluster-hw-llm-optimization",
+  "displayName": "Cluster HW Profiler & LLM Fine-Tuner",
+  "description": "Hardware, BIOS, and driver profiler plus per-node local LLM serving hill-climber and stability certification suite across Windows and WSL.",
+  "version": "1.1.0",
+  "author": "cluster-hw-llm-optimization contributors",
+  "suggestedPrompts": [
+    "Profile this node's hardware, BIOS, drivers, power plan, and Event Log health with hw_node_profile",
+    "Verify my GPU undervolt/VRAM OC and CPU Curve Optimizer stability against prefill and WHEA/nvlddmkm errors",
+    "Compute theoretical ceilings and fine-tune LLM serving parameters for a model on this cluster node"
+  ]
+}

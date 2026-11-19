@@ -1,0 +1,11 @@
+# Agent Rules — `cluster-hw-llm-optimization`
+
+Universal guidelines loaded across Antigravity, VS Code Copilot, OpenCode, and Claude Code.
+
+1. **Two-Phase Discipline (Hardware First, Then LLM Fine-Tuning):**
+   - Always inspect and verify a cluster node's hardware configuration, BIOS status, drivers, power plan, and Event Log stability (`tools/hw/hardware_probe.py` / MCP `hw_node_profile`) before benchmarking or tuning LLM serving parameters on that node.
+   - If `nvlddmkm 153` / `CUDA illegal memory access` occurs, inspect GPU V/F curve right-tail flatness (`tools/hw/gpu_oc_verify.py`) and KV cache VRAM fit (`q8_0` or split `K=q8_0:V=f16` on 12 GiB cards). If `WHEA 18/19` occurs, map APIC IDs to physical cores (`floor(APIC/2)`) and verify Per-Core Curve Optimizer (`tools/hw/stress_suite.py`).
+2. **Preserve Persisted LM Studio Defaults:** Never overwrite or delete `user-concrete-model-default-config/*.json` during verification. Use `tools/cluster_ctl.py load <key> --node <node>` (`lms load <key> -y` locally) to test persisted defaults, and use `tools/llm/lmctl_bench.py` for temporary A/B overrides (which snapshots and restores permanent defaults on unload).
+3. **Prefix Isolation Across Nodes:** When a node participates in LM Link, always scope model loads/unloads to that node's configured prefixes (`model_prefixes` in `cluster.local.json`). Never run un-scoped `lms unload --all`.
+4. **WSL -> Windows `.exe` Stdin Rule:** Always redirect stdin (`< /dev/null` or `stdin=subprocess.DEVNULL`) when calling `lms.exe`, `powershell.exe`, or Windows `python.exe` from WSL.
+5. **Public-Safe Privacy:** Never commit personal usernames, hostnames, Tailscale IPs, hardware serials, or tokens/credentials into tracked files. Keep local endpoints/paths in gitignored `cluster.local.json` and run `python3 scripts/doctor.py --all --check-privacy` before pushing.

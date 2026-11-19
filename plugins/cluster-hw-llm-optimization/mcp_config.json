@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cluster-hw-llm": {
+      "command": "python3",
+      "args": ["../../mcp/cluster_mcp_server.py"]
+    }
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "cluster_name": "cluster-hw-llm-optimization",
+  "local_node": "torre",
+  "nodes": {
+    "torre": {
+      "label": "torre",
+      "role": "desktop-cuda-workstation",
+      "os": "windows+wsl",
+      "base_url": "http://127.0.0.1:1234",
+      "model_prefixes": ["t-", "text-embedding-t-"],
+      "hardware": {
+        "cpu": "AMD Ryzen 9 5950X (16C/32T)",
+        "motherboard": "ASUS ROG STRIX X570-E GAMING",
+        "ram": "32 GiB DDR4-3600 CL14 (4x8 GiB dual-rank/ch)",
+        "gpu": "NVIDIA GeForce RTX 3080 Ti (12 GiB GDDR6X)",
+        "vram_gib": 12.0,
+        "memory_cap_gib": 11.75,
+        "stock_bw_gbs": 788.48,
+        "oc_bw_gbs": 831.81,
+        "peak_tflops_fp16": 115.0
+      },
+      "default_gpu_oc": {
+        "power_limit_pct": 100,
+        "power_limit_w": 350,
+        "vram_offset_mhz": 500,
+        "vram_clock_mhz": 10001,
+        "vf_target_mhz": 1770,
+        "vf_target_mv": 875,
+        "vf_cap_mhz": 1785
+      },
+      "verify_models": [
+        {"key": "t-code-chat", "prefills": [2048, 4096], "extra_body": {}},
+        {"key": "t-vision-context", "prefills": [2048, 8192], "extra_body": {"reasoning_effort": "none"}}
+      ],
+      "paths": {
+        "lmstudio_home": "<LMSTUDIO_HOME>",
+        "lms_cli": "<LMS_CLI>",
+        "win_python": "<WIN_PYTHON>",
+        "afterburner_cfg": "<AFTERBURNER_PROFILE_CFG>"
+      }
+    },
+    "portatil": {
+      "label": "portatil",
+      "role": "laptop-unified-igpu",
+      "os": "windows+wsl",
+      "base_url": "http://<PORTATIL_TAILSCALE_IP>:1234",
+      "model_prefixes": ["p-", "text-embedding-p-"],
+      "hardware": {
+        "cpu": "Intel Core Ultra 7 258V",
+        "ram": "32 GiB LPDDR5x-8533 unified",
+        "gpu": "Intel Arc 140V iGPU (75% Shared Memory Override)",
+        "vram_gib": 24.0,
+        "memory_cap_gib": 24.0,
+        "est_bw_gbs": 110.0,
+        "peak_tflops_fp16": 33.0
+      },
+      "verify_models": [
+        {"key": "p-battery-chat", "prefills": [2048, 4096], "extra_body": {"reasoning_effort": "none"}},
+        {"key": "p-agent-moe-alt", "prefills": [2048, 4096], "extra_body": {"reasoning_effort": "none"}}
+      ],
+      "paths": {
+        "lmstudio_home": "<PORTATIL_LMSTUDIO_HOME>",
+        "lms_cli": "<PORTATIL_LMS_CLI>"
+      }
+    }
+  }
+}

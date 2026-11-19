@@ -1,0 +1,24 @@
+{
+  "model_name": "p-agent-moe-alt (Qwen3-30B-A3B ~Q4_K_M)",
+  "hardware": "HP OmniBook Ultra Flip 14 (Core Ultra 7 258V, Arc 140V, 32GB LPDDR5x-8533, estimated ~110 GB/s)",
+  "bandwidth_gbs": 110.0,
+  "peak_tflops": 33.0,
+  "mfu": 0.5,
+  "dense_gb": 0.95,
+  "experts_gb": 16.68,
+  "top_k": 8,
+  "n_experts": 128,
+  "lm_head_gb": 0.35,
+  "active_params_b": 3.3,
+  "attn_layers": 48,
+  "attn_heads": 32,
+  "head_dim": 128,
+  "kv_bytes_per_token": 98304,
+  "draft_layer_gb": 0,
+  "draft_head_gb": 0,
+  "spec": [
+    {"drafts": 0, "accept": 1.0}
+  ],
+  "contexts": [2048, 8192, 16384, 32768],
+  "concurrency": [1, 2, 4]
+}

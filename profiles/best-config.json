@@ -1,0 +1,265 @@
+{
+  "generated_at": "2026-11-19",
+  "nodes": {
+    "torre": {
+      "endpoint_default": "http://127.0.0.1:1234",
+      "gpu": "NVIDIA GeForce RTX 3080 Ti (12 GiB GDDR6X, stock 9,501 MHz / 788.48 GB/s; verified flattened UV+OC 1,770-1,785 MHz @ 875 mV + 10,001 MHz VRAM / 831.81 GB/s)",
+      "cpu_ram": "AMD Ryzen 9 5950X (16C/32T, Per-Core CO), 32 GiB DDR4-3600 CL14",
+      "runtime": "llama.cpp-win-x86_64-nvidia-cuda-avx2@2.73.0",
+      "system_state_changes": [
+        "<LMSTUDIO_HOME>/.internal/hardware-config.json: load.gpuStrictVramCap = false on cuda, cuda12, cuda13",
+        "<LMSTUDIO_HOME>/.internal/user-concrete-model-default-config/*.json persisted for all 7 t-* LLMs",
+        "NVIDIA Control Panel: CUDA - Sysmem Fallback Policy = Prefer No Sysmem Fallback",
+        "MSI Afterburner: Flattened 1,770 MHz @ 875 mV (1,785 MHz cap) + +500 MHz VRAM (10,001 MHz), 100% PL (350 W)",
+        "Windows Power Plan: Balanced + PCIe ASPM Off + AMD Chipset Software 8.09.28.1124 + BIOS Per-Core CO"
+      ],
+      "uv_oc_verified": {
+        "bw_d2d_gbs": 831.81,
+        "t_code_chat": {"ttft_short_ms": 36.8, "c1_tps": 71.12, "c2_tps": 128.53, "prefill_2048_tps": 2069.6, "prefill_4096_tps": 2209.8, "peak_temp_c": 70.2, "throttle": "0x1"},
+        "t_vision_context": {"ttft_short_ms": 40.6, "c1_tps": 107.44, "c2_tps": 143.76, "prefill_2048_tps": 2061.2, "prefill_8192_tps": 2505.6, "peak_temp_c": 73.3, "throttle": "0x1"}
+      },
+      "models": {
+        "t-code-chat": {
+          "underlying_model": "Qwen2.5-Coder-14B-Instruct Q4_K_M (8.57 GiB)",
+          "winner_config": "pc-code-pbs2048",
+          "load_params": {
+            "context_length": 8192,
+            "parallel": 2,
+            "flash_attention": true,
+            "k_cache_quant": "q8_0",
+            "v_cache_quant": "q8_0",
+            "eval_batch_size": 2048,
+            "physical_batch_size": 2048,
+            "context_checkpoints": 32,
+            "auto_fit": false,
+            "gpu_strict_vram_cap": false,
+            "offload_ratio": "max"
+          },
+          "baseline": {"c1_tps": 18.43, "c2_tps": 34.02, "prefill_2048_tps": 188.5, "prefill_4096_tps": 1021.7, "ttft_ms": 140.1, "startup_s": 8.8, "mem_gib": 10.93},
+          "optimized": {"c1_tps": 60.34, "c2_tps": 107.30, "prefill_2048_tps": 1993.9, "prefill_4096_tps": 1970.8, "ttft_ms": 44.8, "startup_s": 5.9, "mem_gib": 11.12, "needle_50pct": "3/3", "needle_100pct": "3/3"},
+          "optimized_uv_oc": {"c1_tps": 71.12, "c2_tps": 128.53, "prefill_2048_tps": 2069.6, "prefill_4096_tps": 2209.8, "ttft_ms": 36.8}
+        },
+        "t-general-agent": {
+          "underlying_model": "Qwen3-14B Q4_K_M (8.58 GiB)",
+          "winner_config": "pc-gen-q8-12k",
+          "load_params": {
+            "context_length": 12288,
+            "parallel": 2,
+            "flash_attention": true,
+            "k_cache_quant": "q8_0",
+            "v_cache_quant": "q8_0",
+            "eval_batch_size": 2048,
+            "physical_batch_size": 512,
+            "context_checkpoints": 32,
+            "enable_thinking": false,
+            "auto_fit": false,
+            "gpu_strict_vram_cap": false,
+            "offload_ratio": "max"
+          },
+          "baseline": {"c1_tps": 19.34, "c2_tps": 35.82, "prefill_2048_tps": null, "prefill_4096_tps": null, "ttft_ms": 136.7, "startup_s": 8.7, "mem_gib": 10.94},
+          "optimized": {"c1_tps": 60.92, "c2_tps": 110.49, "prefill_2048_tps": 2017.1, "prefill_4096_tps": 2056.2, "ttft_ms": 44.9, "startup_s": 5.8, "mem_gib": 10.81, "needle_50pct": "3/3", "needle_100pct": "3/3"}
+        },
+        "t-fast-agent": {
+          "underlying_model": "Qwen3-8B Q4_K_M (4.79 GiB)",
+          "winner_config": "pc-fast-fa",
+          "load_params": {
+            "context_length": 16384,
+            "parallel": 4,
+            "flash_attention": true,
+            "k_cache_quant": "f16",
+            "v_cache_quant": "f16",
+            "eval_batch_size": 2048,
+            "physical_batch_size": 512,
+            "context_checkpoints": 32,
+            "enable_thinking": false,
+            "auto_fit": false,
+            "gpu_strict_vram_cap": false,
+            "offload_ratio": "max"
+          },
+          "co_residency_alt_config": "pc-fast-q8-16k (q8_0 KV -> 7.54 GiB, co-resident with t-autocomplete-tab + text-embedding-t-embed-index in 10.05 GiB)",
+          "baseline": {"c1_tps": 101.21, "c4_tps": 264.42, "prefill_2048_tps": 178.4, "prefill_4096_tps": 2800.1, "ttft_ms": 37.2, "startup_s": 5.2, "mem_gib": 9.81},
+          "optimized": {"c1_tps": 127.35, "c4_tps": 323.01, "prefill_2048_tps": 3556.7, "prefill_4096_tps": 4050.9, "ttft_ms": 29.1, "startup_s": 4.4, "mem_gib": 8.55, "needle_50pct": "3/3", "needle_100pct": "3/3"}
+        },
+        "t-vision-context": {
+          "underlying_model": "Gemma-4-12B-IT Q4_K_M (7.42 GiB) + T-draft-gemma-mtp (0.45 GiB MTP sidecar)",
+          "winner_config": "pc-vis-mtp3",
+          "load_params": {
+            "context_length": 16384,
+            "parallel": 2,
+            "flash_attention": true,
+            "k_cache_quant": "q8_0",
+            "v_cache_quant": "q8_0",
+            "eval_batch_size": 2048,
+            "physical_batch_size": 512,
+            "context_checkpoints": 0,
+            "draft_mtp_sidecar": true,
+            "draft_model": "bartowski/T-draft-gemma-mtp/T-draft-gemma-mtp.gguf",
+            "draft_max_tokens": 3,
+            "enable_thinking": false,
+            "auto_fit": false,
+            "gpu_strict_vram_cap": false,
+            "offload_ratio": "max"
+          },
+          "baseline": {"c1_tps": 34.07, "c2_tps": 59.25, "prefill_2048_tps": 103.2, "prefill_8192_tps": 1409.3, "ttft_ms": 620.0, "startup_s": 8.6, "mem_gib": 10.93},
+          "optimized": {"c1_tps": 97.69, "c2_tps": 132.84, "prefill_2048_tps": 2091.0, "prefill_8192_tps": 2240.4, "ttft_ms": 53.7, "startup_s": 6.1, "mem_gib": 10.69, "needle_50pct": "3/3", "needle_100pct": "3/3", "greedy_equivalence": "2/3 exact 1.0000 match, 1/3 0.8966 match"},
+          "optimized_uv_oc": {"c1_tps": 107.44, "c2_tps": 143.76, "prefill_2048_tps": 2061.2, "prefill_8192_tps": 2505.6, "ttft_ms": 40.6}
+        },
+        "t-math-physics": {
+          "underlying_model": "Phi-4 14B Q4_K_M (8.63 GiB, arch=phi3)",
+          "winner_config": "pc-math-k8v16-8k",
+          "load_params": {
+            "context_length": 8192,
+            "parallel": 2,
+            "flash_attention": true,
+            "k_cache_quant": "q8_0",
+            "v_cache_quant": "f16",
+            "eval_batch_size": 2048,
+            "physical_batch_size": 512,
+            "context_checkpoints": 32,
+            "auto_fit": false,
+            "gpu_strict_vram_cap": false,
+            "offload_ratio": "max"
+          },
+          "baseline": {"c1_tps": 19.63, "c2_tps": 37.03, "prefill_2048_tps": null, "prefill_4096_tps": null, "ttft_ms": 123.7, "startup_s": 8.9, "mem_gib": 10.89},
+          "optimized": {"c1_tps": 63.42, "c2_tps": 118.41, "prefill_2048_tps": 1877.6, "prefill_4096_tps": 2029.9, "ttft_ms": 35.3, "startup_s": 5.8, "mem_gib": 11.20, "needle_50pct": "3/3", "needle_100pct": "3/3"}
+        },
+        "t-deep-reasoning": {
+          "underlying_model": "DeepSeek-R1-Distill-Qwen-14B Q4_K_S (8.18 GiB)",
+          "winner_config": "pc-deep-q8-8k",
+          "load_params": {
+            "context_length": 8192,
+            "parallel": 2,
+            "flash_attention": true,
+            "k_cache_quant": "q8_0",
+            "v_cache_quant": "q8_0",
+            "eval_batch_size": 2048,
+            "physical_batch_size": 512,
+            "context_checkpoints": 32,
+            "enable_thinking": true,
+            "auto_fit": false,
+            "gpu_strict_vram_cap": false,
+            "offload_ratio": "max"
+          },
+          "baseline": {"c1_tps": 27.20, "c2_tps": 49.88, "prefill_2048_tps": 186.4, "prefill_4096_tps": 1198.6, "ttft_ms": 187.5, "startup_s": 8.4, "mem_gib": 10.86},
+          "optimized": {"c1_tps": 61.17, "c2_tps": 111.61, "prefill_2048_tps": 1942.1, "prefill_4096_tps": 1999.9, "ttft_ms": 93.8, "startup_s": 5.7, "mem_gib": 10.45, "needle_50pct": "3/3", "needle_100pct": "3/3"}
+        },
+        "t-autocomplete-tab": {
+          "underlying_model": "Qwen2.5-Coder-1.5B-Instruct Q8_0 (1.57 GiB)",
+          "winner_config": "pc-auto-fa",
+          "load_params": {
+            "context_length": 4096,
+            "parallel": 4,
+            "flash_attention": true,
+            "k_cache_quant": "f16",
+            "v_cache_quant": "f16",
+            "eval_batch_size": 2048,
+            "physical_batch_size": 512,
+            "context_checkpoints": 32,
+            "auto_fit": false,
+            "gpu_strict_vram_cap": false,
+            "offload_ratio": "max"
+          },
+          "baseline": {"c1_tps": 218.47, "c4_tps": 410.52, "prefill_2048_tps": 1660.5, "ttft_ms": 33.0, "startup_s": 3.6, "mem_gib": 3.87},
+          "optimized": {"c1_tps": 218.60, "c4_tps": 482.72, "prefill_2048_tps": 10796.6, "ttft_ms": 23.5, "fim_median_ttft_ms": 17.8, "fim_median_32tok_ms": 143.6, "startup_s": 3.0, "mem_gib": 3.55}
+        },
+        "text-embedding-t-embed-index": {
+          "underlying_model": "Nomic-Embed-Text-v1.5 Q8_0 (0.14 GiB)",
+          "load_params": {"context_length": 2048, "offload_ratio": "max"},
+          "throughput_emb_per_s": 211.2,
+          "batch32_median_ms": 151.5
+        }
+      }
+    },
+    "portatil": {
+      "endpoint_default": "http://<PORTATIL_TAILSCALE_IP>:1234",
+      "hardware": "HP OmniBook Ultra Flip 14 — Intel Core Ultra 7 258V, Intel Arc 140V iGPU, 32 GB LPDDR5x-8533 unified (~110 GB/s est., 75% Shared GPU Memory Override = ~24 GB)",
+      "persistence_script": "profiles/portatil/apply_defaults.ps1",
+      "models": {
+        "p-agent-moe-alt": {
+          "underlying_model": "Qwen3-30B-A3B (~16.75 GiB)",
+          "winner_config": "lap-qwenmoe-fa-ckpt0",
+          "load_params": {
+            "context_length": 16384,
+            "parallel": 4,
+            "flash_attention": true,
+            "offload_kv_cache_to_gpu": true,
+            "eval_batch_size": 2048,
+            "physical_batch_size": 512,
+            "context_checkpoints": 0,
+            "enable_thinking": false
+          },
+          "baseline": {"c1_tps": 25.81, "c4_tps": 29.61, "prefill_2048_tps": 13.7, "prefill_4096_tps": 426.6, "ttft_ms": 671.5, "startup_s": 79.3},
+          "optimized": {"c1_tps": 26.99, "c4_tps": 38.70, "prefill_2048_tps": 332.7, "prefill_4096_tps": 349.4, "ttft_ms": 560.3, "startup_s": 80.8, "needle_50pct": "3/3", "needle_100pct": "3/3"}
+        },
+        "p-code-moe": {
+          "underlying_model": "Qwen3-Coder-30B-A3B-Instruct Q4_K_M (~17.28 GiB)",
+          "winner_config": "lap-codmoe-fa",
+          "load_params": {
+            "context_length": 16384,
+            "parallel": 4,
+            "flash_attention": true,
+            "offload_kv_cache_to_gpu": true,
+            "eval_batch_size": 2048,
+            "physical_batch_size": 512,
+            "context_checkpoints": 32
+          },
+          "baseline": {"c1_tps": 23.41, "c4_tps": 27.84, "prefill_2048_tps": 14.3, "prefill_4096_tps": 367.7, "ttft_ms": 595.4, "startup_s": 85.2},
+          "optimized": {"c1_tps": 26.09, "c4_tps": 36.93, "prefill_2048_tps": 308.4, "prefill_4096_tps": 330.0, "ttft_ms": 499.5, "startup_s": 82.0, "needle_50pct": "3/3", "needle_100pct": "3/3"}
+        },
+        "p-agent-moe": {
+          "underlying_model": "Gemma-4-26B-A4B-IT (~16.98 GiB)",
+          "winner_config": "lap-gemmoe-fa",
+          "load_params": {
+            "context_length": 32768,
+            "parallel": 2,
+            "flash_attention": true,
+            "offload_kv_cache_to_gpu": true,
+            "eval_batch_size": 2048,
+            "physical_batch_size": 512,
+            "context_checkpoints": 32,
+            "enable_thinking": false
+          },
+          "baseline": {"c1_tps": 17.59, "c2_tps": 19.35, "prefill_2048_tps": 11.1, "prefill_8192_tps": 396.4, "ttft_ms": 932.5, "startup_s": 83.1},
+          "optimized": {"c1_tps": 20.57, "c2_tps": 21.27, "prefill_2048_tps": 134.2, "prefill_8192_tps": 245.9, "ttft_ms": 491.1, "startup_s": 77.0, "needle_50pct": "3/3", "needle_100pct": "3/3 (at 20,588 prompt tokens)"}
+        },
+        "p-battery-chat": {
+          "underlying_model": "Qwen3-4B Q4_K_M (~2.33 GiB)",
+          "winner_config": "lap-bat-fa",
+          "load_params": {
+            "context_length": 16384,
+            "parallel": 2,
+            "flash_attention": true,
+            "offload_kv_cache_to_gpu": true,
+            "eval_batch_size": 2048,
+            "physical_batch_size": 512,
+            "context_checkpoints": 32,
+            "enable_thinking": false
+          },
+          "baseline": {"c1_tps": 24.30, "c2_tps": 37.68, "prefill_2048_tps": 18.9, "prefill_4096_tps": 582.3, "ttft_ms": 251.3, "startup_s": 4.9},
+          "optimized": {"c1_tps": 26.05, "c2_tps": 43.86, "prefill_2048_tps": 495.1, "prefill_4096_tps": 444.7, "ttft_ms": 142.6, "startup_s": 4.5, "needle_50pct": "3/3", "needle_100pct": "3/3"}
+        },
+        "p-autocomplete-tab": {
+          "underlying_model": "Qwen2.5-Coder-1.5B-Instruct Q8_0 (~1.53 GiB)",
+          "winner_config": "lap-auto-fa",
+          "load_params": {
+            "context_length": 4096,
+            "parallel": 4,
+            "flash_attention": true,
+            "offload_kv_cache_to_gpu": true,
+            "eval_batch_size": 2048,
+            "physical_batch_size": 512,
+            "context_checkpoints": 32
+          },
+          "baseline": {"c1_tps": 47.45, "c4_tps": 105.36, "prefill_2048_tps": 52.7, "ttft_ms": 77.6, "startup_s": 3.7},
+          "optimized": {"c1_tps": 45.45, "c4_tps": 141.66, "prefill_2048_tps": 1038.7, "ttft_ms": 75.8, "fim_median_ttft_ms": 50.4, "fim_median_32tok_ms": 644.0, "startup_s": 3.7}
+        },
+        "text-embedding-p-embed-index": {
+          "underlying_model": "Nomic-Embed-Text-v1.5 Q8_0 (~0.14 GiB)",
+          "load_params": {"context_length": 2048},
+          "throughput_emb_per_s": 90.7,
+          "batch32_median_ms": 352.9
+        }
+      }
+    }
+  }
+}

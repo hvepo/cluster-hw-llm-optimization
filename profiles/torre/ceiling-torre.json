@@ -1,0 +1,24 @@
+{
+  "model_name": "t-code-chat (Qwen2.5-Coder-14B Q4_K_M) + t-draft-coder (0.5B Q8_0)",
+  "hardware": "NVIDIA RTX 3080 Ti (12 GiB GDDR6X @ 9501 MHz stock 788.5 GB/s; 10001 MHz UV+OC 831.8 GB/s)",
+  "bandwidth_gbs": 831.81,
+  "peak_tflops": 115.0,
+  "mfu": 0.5,
+  "dense_gb": 7.906,
+  "experts_gb": 0,
+  "lm_head_gb": 0.639,
+  "active_params_b": 14.77,
+  "attn_layers": 48,
+  "attn_heads": 40,
+  "head_dim": 128,
+  "kv_bytes_per_token": 196608,
+  "draft_layer_gb": 0.380,
+  "draft_head_gb": 0.145,
+  "spec": [
+    {"drafts": 0, "accept": 1.0},
+    {"drafts": 2, "accept": 2.1},
+    {"drafts": 4, "accept": 3.0}
+  ],
+  "contexts": [2048, 8192, 16384],
+  "concurrency": [1, 2, 4]
+}
