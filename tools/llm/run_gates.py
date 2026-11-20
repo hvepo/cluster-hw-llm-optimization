@@ -110,7 +110,7 @@ def run_node_gates(cfg, node_name):
     specs = {
         "torre": [
             ("t-vision-context", 16384, {"reasoning_effort": "none"}),
-            ("t-code-chat", 8192, None),
+            ("t-code-chat", 12288, None),
             ("t-general-agent", 12288, {"reasoning_effort": "none"}),
             ("t-fast-agent", 16384, {"reasoning_effort": "none"}),
             ("t-math-physics", 8192, None),

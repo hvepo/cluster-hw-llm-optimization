@@ -21,10 +21,10 @@ from cluster_lib import (  # noqa: E402
 )
 
 TORRE_DEFAULTS = [
-    {"key": "t-code-chat", "context_length": 8192, "parallel": 2, "flash_attention": True, "k_quant": "q8_0", "v_quant": "q8_0", "eval_batch_size": 2048, "physical_batch_size": 2048, "context_checkpoints": 32, "enable_thinking": None, "mtp_sidecar": False},
+    {"key": "t-code-chat", "context_length": 12288, "parallel": 2, "flash_attention": True, "k_quant": "q8_0", "v_quant": "q8_0", "eval_batch_size": 2048, "physical_batch_size": 512, "context_checkpoints": 32, "enable_thinking": None, "mtp_sidecar": False},
     {"key": "t-general-agent", "context_length": 12288, "parallel": 2, "flash_attention": True, "k_quant": "q8_0", "v_quant": "q8_0", "eval_batch_size": 2048, "physical_batch_size": 512, "context_checkpoints": 32, "enable_thinking": False, "mtp_sidecar": False},
     {"key": "t-fast-agent", "context_length": 16384, "parallel": 4, "flash_attention": True, "k_quant": "f16", "v_quant": "f16", "eval_batch_size": 2048, "physical_batch_size": 512, "context_checkpoints": 32, "enable_thinking": False, "mtp_sidecar": False},
-    {"key": "t-vision-context", "context_length": 16384, "parallel": 2, "flash_attention": True, "k_quant": "q8_0", "v_quant": "q8_0", "eval_batch_size": 2048, "physical_batch_size": 512, "context_checkpoints": 0, "enable_thinking": False, "mtp_sidecar": True, "draft_model": "bartowski/T-draft-gemma-mtp/T-draft-gemma-mtp.gguf", "draft_max_tokens": 3},
+    {"key": "t-vision-context", "context_length": 16384, "parallel": 2, "flash_attention": True, "k_quant": "q8_0", "v_quant": "q8_0", "eval_batch_size": 2048, "physical_batch_size": 512, "context_checkpoints": 0, "enable_thinking": False, "mtp_sidecar": True, "draft_model": "bartowski/T-draft-gemma-mtp/T-draft-gemma-mtp.gguf", "draft_max_tokens": 4},
     {"key": "t-math-physics", "context_length": 8192, "parallel": 2, "flash_attention": True, "k_quant": "q8_0", "v_quant": "f16", "eval_batch_size": 2048, "physical_batch_size": 512, "context_checkpoints": 32, "enable_thinking": None, "mtp_sidecar": False},
     {"key": "t-deep-reasoning", "context_length": 8192, "parallel": 2, "flash_attention": True, "k_quant": "q8_0", "v_quant": "q8_0", "eval_batch_size": 2048, "physical_batch_size": 512, "context_checkpoints": 32, "enable_thinking": True, "mtp_sidecar": False},
     {"key": "t-autocomplete-tab", "context_length": 4096, "parallel": 4, "flash_attention": True, "k_quant": "f16", "v_quant": "f16", "eval_batch_size": 2048, "physical_batch_size": 512, "context_checkpoints": 32, "enable_thinking": None, "mtp_sidecar": False},
@@ -67,6 +67,17 @@ def write_default_cfg(default_root, index_cache, spec):
             {"key": "llm.load.speculativeDecoding.draftModel", "value": spec["draft_model"]},
             {"key": "llm.load.speculativeDecoding.draftMaxTokens", "value": spec["draft_max_tokens"]},
         ])
+    if spec.get("draft_simple"):
+        load_fields.extend([
+            {"key": "llm.load.speculativeDecoding.draftSimple", "value": True},
+            {"key": "llm.load.speculativeDecoding.draftModel", "value": spec["draft_model"]},
+        ])
+        if spec.get("draft_max_tokens") is not None:
+            load_fields.append({"key": "llm.load.speculativeDecoding.draftMaxTokens", "value": spec["draft_max_tokens"]})
+        if spec.get("draft_min_tokens") is not None:
+            load_fields.append({"key": "llm.load.speculativeDecoding.draftMinTokens", "value": spec["draft_min_tokens"]})
+        if spec.get("draft_min_continue_prob") is not None:
+            load_fields.append({"key": "llm.load.speculativeDecoding.draftMinContinueProbability", "value": spec["draft_min_continue_prob"]})
     op_fields = []
     if spec.get("enable_thinking") is not None:
         op_fields.append({"key": "llm.prediction.reasoning.enableThinking", "value": spec["enable_thinking"]})

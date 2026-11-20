@@ -220,6 +220,17 @@ def cmd_load(args, cfg):
                 load_fields.append({"key": "llm.load.speculativeDecoding.draftModel", "value": draft_rel})
             if args.draft_max_tokens is not None:
                 load_fields.append({"key": "llm.load.speculativeDecoding.draftMaxTokens", "value": args.draft_max_tokens})
+        if args.draft_simple:
+            load_fields.append({"key": "llm.load.speculativeDecoding.draftSimple", "value": True})
+            if args.draft_model:
+                draft_rel = resolve_indexed_id(lms_home, args.draft_model) if "/" not in args.draft_model else args.draft_model
+                load_fields.append({"key": "llm.load.speculativeDecoding.draftModel", "value": draft_rel})
+            if args.draft_max_tokens is not None:
+                load_fields.append({"key": "llm.load.speculativeDecoding.draftMaxTokens", "value": args.draft_max_tokens})
+            if args.draft_min_tokens is not None:
+                load_fields.append({"key": "llm.load.speculativeDecoding.draftMinTokens", "value": args.draft_min_tokens})
+            if args.draft_min_continue_prob is not None:
+                load_fields.append({"key": "llm.load.speculativeDecoding.draftMinContinueProbability", "value": args.draft_min_continue_prob})
 
         op_fields = []
         if args.enable_thinking is not None:
@@ -269,8 +280,11 @@ def main():
     pl.add_argument("--physical-batch-size", type=int)
     pl.add_argument("--context-checkpoints", type=int)
     pl.add_argument("--draft-mtp-sidecar", action="store_true")
+    pl.add_argument("--draft-simple", action="store_true")
     pl.add_argument("--draft-model")
     pl.add_argument("--draft-max-tokens", type=int)
+    pl.add_argument("--draft-min-tokens", type=int)
+    pl.add_argument("--draft-min-continue-prob", type=float)
     pl.add_argument("--enable-thinking", type=parse_bool)
     pl.add_argument("--runtime")
     pl.add_argument("--keep-loaded", action="store_true")

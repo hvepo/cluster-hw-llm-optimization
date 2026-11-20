@@ -1,11 +1,11 @@
 {
-  "generated_at": "2026-11-19",
+  "generated_at": "2026-11-20",
   "nodes": {
     "torre": {
       "endpoint_default": "http://127.0.0.1:1234",
       "gpu": "NVIDIA GeForce RTX 3080 Ti (12 GiB GDDR6X, stock 9,501 MHz / 788.48 GB/s; verified flattened UV+OC 1,770-1,785 MHz @ 875 mV + 10,001 MHz VRAM / 831.81 GB/s)",
       "cpu_ram": "AMD Ryzen 9 5950X (16C/32T, Per-Core CO), 32 GiB DDR4-3600 CL14",
-      "runtime": "llama.cpp-win-x86_64-nvidia-cuda-avx2@2.73.0",
+      "runtime": "llama.cpp-win-x86_64-nvidia-cuda-avx2@2.79.0",
       "system_state_changes": [
         "<LMSTUDIO_HOME>/.internal/hardware-config.json: load.gpuStrictVramCap = false on cuda, cuda12, cuda13",
         "<LMSTUDIO_HOME>/.internal/user-concrete-model-default-config/*.json persisted for all 7 t-* LLMs",
@@ -21,15 +21,15 @@
       "models": {
         "t-code-chat": {
           "underlying_model": "Qwen2.5-Coder-14B-Instruct Q4_K_M (8.57 GiB)",
-          "winner_config": "pc-code-pbs2048",
+          "winner_config": "pc-code-q8-12k",
           "load_params": {
-            "context_length": 8192,
+            "context_length": 12288,
             "parallel": 2,
             "flash_attention": true,
             "k_cache_quant": "q8_0",
             "v_cache_quant": "q8_0",
             "eval_batch_size": 2048,
-            "physical_batch_size": 2048,
+            "physical_batch_size": 512,
             "context_checkpoints": 32,
             "auto_fit": false,
             "gpu_strict_vram_cap": false,
@@ -37,7 +37,7 @@
           },
           "baseline": {"c1_tps": 18.43, "c2_tps": 34.02, "prefill_2048_tps": 188.5, "prefill_4096_tps": 1021.7, "ttft_ms": 140.1, "startup_s": 8.8, "mem_gib": 10.93},
           "optimized": {"c1_tps": 60.34, "c2_tps": 107.30, "prefill_2048_tps": 1993.9, "prefill_4096_tps": 1970.8, "ttft_ms": 44.8, "startup_s": 5.9, "mem_gib": 11.12, "needle_50pct": "3/3", "needle_100pct": "3/3"},
-          "optimized_uv_oc": {"c1_tps": 71.12, "c2_tps": 128.53, "prefill_2048_tps": 2069.6, "prefill_4096_tps": 2209.8, "ttft_ms": 36.8}
+          "optimized_uv_oc": {"c1_tps": 72.11, "c2_tps": 130.74, "prefill_2048_tps": 2207.2, "prefill_4096_tps": 2263.9, "ttft_ms": 34.1, "mem_gib": 10.91, "needle_50pct": "3/3", "needle_100pct": "3/3"}
         },
         "t-general-agent": {
           "underlying_model": "Qwen3-14B Q4_K_M (8.58 GiB)",
@@ -57,7 +57,8 @@
             "offload_ratio": "max"
           },
           "baseline": {"c1_tps": 19.34, "c2_tps": 35.82, "prefill_2048_tps": null, "prefill_4096_tps": null, "ttft_ms": 136.7, "startup_s": 8.7, "mem_gib": 10.94},
-          "optimized": {"c1_tps": 60.92, "c2_tps": 110.49, "prefill_2048_tps": 2017.1, "prefill_4096_tps": 2056.2, "ttft_ms": 44.9, "startup_s": 5.8, "mem_gib": 10.81, "needle_50pct": "3/3", "needle_100pct": "3/3"}
+          "optimized": {"c1_tps": 60.92, "c2_tps": 110.49, "prefill_2048_tps": 2017.1, "prefill_4096_tps": 2056.2, "ttft_ms": 44.9, "startup_s": 5.8, "mem_gib": 10.81, "needle_50pct": "3/3", "needle_100pct": "3/3"},
+          "optimized_uv_oc": {"c1_tps": 76.16, "c2_tps": 136.77, "prefill_2048_tps": 2245.3, "prefill_4096_tps": 2344.3, "ttft_ms": 32.1, "mem_gib": 10.73, "needle_50pct": "3/3", "needle_100pct": "3/3"}
         },
         "t-fast-agent": {
           "underlying_model": "Qwen3-8B Q4_K_M (4.79 GiB)",
@@ -76,13 +77,14 @@
             "gpu_strict_vram_cap": false,
             "offload_ratio": "max"
           },
-          "co_residency_alt_config": "pc-fast-q8-16k (q8_0 KV -> 7.54 GiB, co-resident with t-autocomplete-tab + text-embedding-t-embed-index in 10.05 GiB)",
+          "co_residency_alt_config": "pc-fast-q8-16k (q8_0 KV -> 7.29 GiB, 120.4 c1 / 326.65 c4; co-resident with t-autocomplete-tab + text-embedding-t-embed-index in 10.01 GiB)",
           "baseline": {"c1_tps": 101.21, "c4_tps": 264.42, "prefill_2048_tps": 178.4, "prefill_4096_tps": 2800.1, "ttft_ms": 37.2, "startup_s": 5.2, "mem_gib": 9.81},
-          "optimized": {"c1_tps": 127.35, "c4_tps": 323.01, "prefill_2048_tps": 3556.7, "prefill_4096_tps": 4050.9, "ttft_ms": 29.1, "startup_s": 4.4, "mem_gib": 8.55, "needle_50pct": "3/3", "needle_100pct": "3/3"}
+          "optimized": {"c1_tps": 127.35, "c4_tps": 323.01, "prefill_2048_tps": 3556.7, "prefill_4096_tps": 4050.9, "ttft_ms": 29.1, "startup_s": 4.4, "mem_gib": 8.55, "needle_50pct": "3/3", "needle_100pct": "3/3"},
+          "optimized_uv_oc": {"c1_tps": 129.81, "c4_tps": 358.38, "prefill_2048_tps": 3560.8, "prefill_4096_tps": 3924.4, "ttft_ms": 22.5, "mem_gib": 8.33, "needle_50pct": "3/3", "needle_100pct": "3/3"}
         },
         "t-vision-context": {
           "underlying_model": "Gemma-4-12B-IT Q4_K_M (7.42 GiB) + T-draft-gemma-mtp (0.45 GiB MTP sidecar)",
-          "winner_config": "pc-vis-mtp3",
+          "winner_config": "pc-vis-mtp4",
           "load_params": {
             "context_length": 16384,
             "parallel": 2,
@@ -94,7 +96,7 @@
             "context_checkpoints": 0,
             "draft_mtp_sidecar": true,
             "draft_model": "bartowski/T-draft-gemma-mtp/T-draft-gemma-mtp.gguf",
-            "draft_max_tokens": 3,
+            "draft_max_tokens": 4,
             "enable_thinking": false,
             "auto_fit": false,
             "gpu_strict_vram_cap": false,
@@ -102,7 +104,7 @@
           },
           "baseline": {"c1_tps": 34.07, "c2_tps": 59.25, "prefill_2048_tps": 103.2, "prefill_8192_tps": 1409.3, "ttft_ms": 620.0, "startup_s": 8.6, "mem_gib": 10.93},
           "optimized": {"c1_tps": 97.69, "c2_tps": 132.84, "prefill_2048_tps": 2091.0, "prefill_8192_tps": 2240.4, "ttft_ms": 53.7, "startup_s": 6.1, "mem_gib": 10.69, "needle_50pct": "3/3", "needle_100pct": "3/3", "greedy_equivalence": "2/3 exact 1.0000 match, 1/3 0.8966 match"},
-          "optimized_uv_oc": {"c1_tps": 107.44, "c2_tps": 143.76, "prefill_2048_tps": 2061.2, "prefill_8192_tps": 2505.6, "ttft_ms": 40.6}
+          "optimized_uv_oc": {"c1_tps": 107.47, "c2_tps": 197.32, "prefill_2048_tps": 2267.2, "prefill_8192_tps": 2092.8, "ttft_ms": 38.3, "mem_gib": 10.21, "needle_50pct": "3/3", "needle_100pct": "3/3"}
         },
         "t-math-physics": {
           "underlying_model": "Phi-4 14B Q4_K_M (8.63 GiB, arch=phi3)",
@@ -121,7 +123,8 @@
             "offload_ratio": "max"
           },
           "baseline": {"c1_tps": 19.63, "c2_tps": 37.03, "prefill_2048_tps": null, "prefill_4096_tps": null, "ttft_ms": 123.7, "startup_s": 8.9, "mem_gib": 10.89},
-          "optimized": {"c1_tps": 63.42, "c2_tps": 118.41, "prefill_2048_tps": 1877.6, "prefill_4096_tps": 2029.9, "ttft_ms": 35.3, "startup_s": 5.8, "mem_gib": 11.20, "needle_50pct": "3/3", "needle_100pct": "3/3"}
+          "optimized": {"c1_tps": 63.42, "c2_tps": 118.41, "prefill_2048_tps": 1877.6, "prefill_4096_tps": 2029.9, "ttft_ms": 35.3, "startup_s": 5.8, "mem_gib": 11.20, "needle_50pct": "3/3", "needle_100pct": "3/3"},
+          "optimized_uv_oc": {"c1_tps": 79.44, "c2_tps": 146.04, "prefill_2048_tps": 2195.4, "prefill_4096_tps": 2266.2, "ttft_ms": 27.2, "mem_gib": 11.12, "needle_50pct": "3/3", "needle_100pct": "3/3"}
         },
         "t-deep-reasoning": {
           "underlying_model": "DeepSeek-R1-Distill-Qwen-14B Q4_K_S (8.18 GiB)",
@@ -141,7 +144,8 @@
             "offload_ratio": "max"
           },
           "baseline": {"c1_tps": 27.20, "c2_tps": 49.88, "prefill_2048_tps": 186.4, "prefill_4096_tps": 1198.6, "ttft_ms": 187.5, "startup_s": 8.4, "mem_gib": 10.86},
-          "optimized": {"c1_tps": 61.17, "c2_tps": 111.61, "prefill_2048_tps": 1942.1, "prefill_4096_tps": 1999.9, "ttft_ms": 93.8, "startup_s": 5.7, "mem_gib": 10.45, "needle_50pct": "3/3", "needle_100pct": "3/3"}
+          "optimized": {"c1_tps": 61.17, "c2_tps": 111.61, "prefill_2048_tps": 1942.1, "prefill_4096_tps": 1999.9, "ttft_ms": 93.8, "startup_s": 5.7, "mem_gib": 10.45, "needle_50pct": "3/3", "needle_100pct": "3/3"},
+          "optimized_uv_oc": {"c1_tps": 75.01, "c2_tps": 134.04, "prefill_2048_tps": 2198.5, "prefill_4096_tps": 2248.8, "ttft_ms": 61.8, "mem_gib": 10.12, "needle_50pct": "3/3", "needle_100pct": "3/3"}
         },
         "t-autocomplete-tab": {
           "underlying_model": "Qwen2.5-Coder-1.5B-Instruct Q8_0 (1.57 GiB)",
@@ -160,13 +164,14 @@
             "offload_ratio": "max"
           },
           "baseline": {"c1_tps": 218.47, "c4_tps": 410.52, "prefill_2048_tps": 1660.5, "ttft_ms": 33.0, "startup_s": 3.6, "mem_gib": 3.87},
-          "optimized": {"c1_tps": 218.60, "c4_tps": 482.72, "prefill_2048_tps": 10796.6, "ttft_ms": 23.5, "fim_median_ttft_ms": 17.8, "fim_median_32tok_ms": 143.6, "startup_s": 3.0, "mem_gib": 3.55}
+          "optimized": {"c1_tps": 218.60, "c4_tps": 482.72, "prefill_2048_tps": 10796.6, "ttft_ms": 23.5, "fim_median_ttft_ms": 17.8, "fim_median_32tok_ms": 143.6, "startup_s": 3.0, "mem_gib": 3.55},
+          "optimized_uv_oc": {"c1_tps": 260.68, "c4_tps": 551.81, "prefill_2048_tps": 9695.2, "ttft_ms": 22.1, "fim_median_ttft_ms": 14.8, "fim_median_32tok_ms": 135.1, "mem_gib": 3.68}
         },
         "text-embedding-t-embed-index": {
           "underlying_model": "Nomic-Embed-Text-v1.5 Q8_0 (0.14 GiB)",
           "load_params": {"context_length": 2048, "offload_ratio": "max"},
-          "throughput_emb_per_s": 211.2,
-          "batch32_median_ms": 151.5
+          "throughput_emb_per_s": 258.3,
+          "batch32_median_ms": 123.9
         }
       }
     },
