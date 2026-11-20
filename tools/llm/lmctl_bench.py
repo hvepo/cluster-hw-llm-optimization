@@ -251,7 +251,7 @@ def cmd_load(args, cfg):
     r = subprocess.run(lms_args, stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=args.timeout)
     if r.returncode != 0:
         raise RuntimeError(f"lms load failed ({r.returncode}): {r.stderr or r.stdout}")
-    deadline = t0 + 30
+    deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         for m in get_api_models(url, timeout=8):
             if m.get("key") == args.model_key and m.get("loaded_instances"):

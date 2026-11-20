@@ -177,12 +177,12 @@
     },
     "portatil": {
       "endpoint_default": "http://<PORTATIL_TAILSCALE_IP>:1234",
-      "hardware": "HP OmniBook Ultra Flip 14 — Intel Core Ultra 7 258V, Intel Arc 140V iGPU, 32 GB LPDDR5x-8533 unified (~110 GB/s est., 75% Shared GPU Memory Override = ~24 GB)",
+      "hardware": "HP OmniBook Ultra Flip 14 — Intel Core Ultra 7 258V, Intel Arc 140V iGPU (driver 32.0.101.9175), 32 GB LPDDR5x-8533 unified (~110 GB/s est., 75% Shared GPU Memory Override = 23.61 GiB DXGI), llama.cpp Vulkan 2.79.0, MinCPU=0%, ASPM=Off (AC)",
       "persistence_script": "profiles/portatil/apply_defaults.ps1",
       "models": {
         "p-agent-moe-alt": {
           "underlying_model": "Qwen3-30B-A3B (~16.75 GiB)",
-          "winner_config": "lap-qwenmoe-fa-ckpt0",
+          "winner_config": "lap-qwenmoe-fa-ckpt0-vk279",
           "load_params": {
             "context_length": 16384,
             "parallel": 4,
@@ -194,11 +194,11 @@
             "enable_thinking": false
           },
           "baseline": {"c1_tps": 25.81, "c4_tps": 29.61, "prefill_2048_tps": 13.7, "prefill_4096_tps": 426.6, "ttft_ms": 671.5, "startup_s": 79.3},
-          "optimized": {"c1_tps": 26.99, "c4_tps": 38.70, "prefill_2048_tps": 332.7, "prefill_4096_tps": 349.4, "ttft_ms": 560.3, "startup_s": 80.8, "needle_50pct": "3/3", "needle_100pct": "3/3"}
+          "optimized": {"c1_tps": 27.53, "c4_tps": 41.57, "prefill_2048_tps": 574.6, "prefill_4096_tps": 626.2, "ttft_ms": 576.0, "startup_s": 79.0, "needle_50pct": "3/3", "needle_100pct": "3/3"}
         },
         "p-code-moe": {
           "underlying_model": "Qwen3-Coder-30B-A3B-Instruct Q4_K_M (~17.28 GiB)",
-          "winner_config": "lap-codmoe-fa",
+          "winner_config": "lap-codmoe-fa-vk279",
           "load_params": {
             "context_length": 16384,
             "parallel": 4,
@@ -209,11 +209,11 @@
             "context_checkpoints": 32
           },
           "baseline": {"c1_tps": 23.41, "c4_tps": 27.84, "prefill_2048_tps": 14.3, "prefill_4096_tps": 367.7, "ttft_ms": 595.4, "startup_s": 85.2},
-          "optimized": {"c1_tps": 26.09, "c4_tps": 36.93, "prefill_2048_tps": 308.4, "prefill_4096_tps": 330.0, "ttft_ms": 499.5, "startup_s": 82.0, "needle_50pct": "3/3", "needle_100pct": "3/3"}
+          "optimized": {"c1_tps": 32.39, "c4_tps": 45.95, "prefill_2048_tps": 657.6, "prefill_4096_tps": 695.7, "ttft_ms": 476.1, "startup_s": 79.4, "needle_50pct": "3/3", "needle_100pct": "3/3"}
         },
         "p-agent-moe": {
           "underlying_model": "Gemma-4-26B-A4B-IT (~16.98 GiB)",
-          "winner_config": "lap-gemmoe-fa",
+          "winner_config": "lap-gemmoe-fa-mtp3-vk279",
           "load_params": {
             "context_length": 32768,
             "parallel": 2,
@@ -222,14 +222,17 @@
             "eval_batch_size": 2048,
             "physical_batch_size": 512,
             "context_checkpoints": 32,
-            "enable_thinking": false
+            "enable_thinking": false,
+            "draft_mtp_sidecar": true,
+            "draft_model": "unsloth/P-draft-gemma-moe-mtp/P-draft-gemma-moe-mtp.gguf",
+            "draft_max_tokens": 3
           },
           "baseline": {"c1_tps": 17.59, "c2_tps": 19.35, "prefill_2048_tps": 11.1, "prefill_8192_tps": 396.4, "ttft_ms": 932.5, "startup_s": 83.1},
-          "optimized": {"c1_tps": 20.57, "c2_tps": 21.27, "prefill_2048_tps": 134.2, "prefill_8192_tps": 245.9, "ttft_ms": 491.1, "startup_s": 77.0, "needle_50pct": "3/3", "needle_100pct": "3/3 (at 20,588 prompt tokens)"}
+          "optimized": {"c1_tps": 26.12, "c2_tps": 28.93, "prefill_2048_tps": 559.9, "prefill_8192_tps": 653.3, "ttft_ms": 457.7, "startup_s": 94.0, "needle_50pct": "3/3", "needle_100pct": "3/3 (at 20,588 prompt tokens; 28.31 tok/s decode)"}
         },
         "p-battery-chat": {
           "underlying_model": "Qwen3-4B Q4_K_M (~2.33 GiB)",
-          "winner_config": "lap-bat-fa",
+          "winner_config": "lap-bat-fa-vk279",
           "load_params": {
             "context_length": 16384,
             "parallel": 2,
@@ -241,28 +244,28 @@
             "enable_thinking": false
           },
           "baseline": {"c1_tps": 24.30, "c2_tps": 37.68, "prefill_2048_tps": 18.9, "prefill_4096_tps": 582.3, "ttft_ms": 251.3, "startup_s": 4.9},
-          "optimized": {"c1_tps": 26.05, "c2_tps": 43.86, "prefill_2048_tps": 495.1, "prefill_4096_tps": 444.7, "ttft_ms": 142.6, "startup_s": 4.5, "needle_50pct": "3/3", "needle_100pct": "3/3"}
+          "optimized": {"c1_tps": 29.44, "c2_tps": 51.17, "prefill_2048_tps": 1117.9, "prefill_4096_tps": 1064.5, "ttft_ms": 88.5, "startup_s": 5.2, "needle_50pct": "3/3", "needle_100pct": "3/3"}
         },
         "p-autocomplete-tab": {
           "underlying_model": "Qwen2.5-Coder-1.5B-Instruct Q8_0 (~1.53 GiB)",
-          "winner_config": "lap-auto-fa",
+          "winner_config": "lap-auto-fa-pbs1024-ckpt0-vk279",
           "load_params": {
             "context_length": 4096,
             "parallel": 4,
             "flash_attention": true,
             "offload_kv_cache_to_gpu": true,
             "eval_batch_size": 2048,
-            "physical_batch_size": 512,
-            "context_checkpoints": 32
+            "physical_batch_size": 1024,
+            "context_checkpoints": 0
           },
           "baseline": {"c1_tps": 47.45, "c4_tps": 105.36, "prefill_2048_tps": 52.7, "ttft_ms": 77.6, "startup_s": 3.7},
-          "optimized": {"c1_tps": 45.45, "c4_tps": 141.66, "prefill_2048_tps": 1038.7, "ttft_ms": 75.8, "fim_median_ttft_ms": 50.4, "fim_median_32tok_ms": 644.0, "startup_s": 3.7}
+          "optimized": {"c1_tps": 48.00, "c4_tps": 135.46, "prefill_2048_tps": 2426.7, "ttft_ms": 49.4, "fim_median_ttft_ms": 41.0, "fim_median_32tok_ms": 706.0, "startup_s": 3.8}
         },
         "text-embedding-p-embed-index": {
           "underlying_model": "Nomic-Embed-Text-v1.5 Q8_0 (~0.14 GiB)",
           "load_params": {"context_length": 2048},
-          "throughput_emb_per_s": 90.7,
-          "batch32_median_ms": 352.9
+          "throughput_emb_per_s": 119.9,
+          "batch32_median_ms": 266.8
         }
       }
     }

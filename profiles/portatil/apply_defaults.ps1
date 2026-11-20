@@ -8,12 +8,13 @@
     2. Sets `load.gpuStrictVramCap = false` in `hardware-config.json`.
     3. Resolves each `p-*` model's `indexedModelIdentifier` from `model-index-cache.json` and writes
        the winning Wave 2 default configuration JSON under `user-concrete-model-default-config`.
-    4. Pass `-EnableGemmaMtpSidecar` to also enable `P-draft-gemma-moe-mtp.gguf` (`draftMtpSidecar=true`,
-       `draftMaxTokens=3`) on `p-agent-moe` (Gemma-4-26B-A4B).
+    4. Enables `P-draft-gemma-moe-mtp.gguf` (`draftMtpSidecar=true`, `draftMaxTokens=3`) on
+       `p-agent-moe` (Gemma-4-26B-A4B) by default (verified on `llama.cpp Vulkan 2.79.0`).
+       Pass `-EnableGemmaMtpSidecar:$false` to disable MTP sidecar.
 #>
 [CmdletBinding()]
 param(
-    [switch]$EnableGemmaMtpSidecar
+    [switch]$EnableGemmaMtpSidecar = $true
 )
 
 $ErrorActionPreference = "Stop"
@@ -103,8 +104,8 @@ $laptopModels = @(
         Parallel            = 4
         FlashAttention      = $true
         EvalBatchSize       = 2048
-        PhysicalBatchSize   = 512
-        ContextCheckpoints  = 32
+        PhysicalBatchSize   = 1024
+        ContextCheckpoints  = 0
         EnableThinking      = $null
         MtpSidecar          = $false
     }
