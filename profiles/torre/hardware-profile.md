@@ -15,6 +15,7 @@
 - **VRAM Offset:** `+500 MHz` (`10,001 MHz` effective GDDR6X)
 - **Voltage/Frequency Curve:** `1,695 MHz @ 850 mV` -> `1,770 MHz @ 875 mV` -> **flat `1,785 MHz` ceiling across `937.5-1,237.5 mV`** (shift-select and drag the entire right tail below the target frequency so Boost never overshoots into `1,900+ MHz` during LLM prefill).
 - **Measured Result:** `831.81 GB/s` CUDA D2D (`0` throttle flags `0x1`/`0x0`), `t-code-chat` `+17.9%` `c1` (`71.12 tok/s`), `t-vision-context` `+10.0%` `c1` (`107.44 tok/s`), `0 nvlddmkm 153` resets.
+- **Saved Afterburner Profile:** `profiles/torre/msi-afterburner-rtx3080ti-fe-optimal.cfg` captures `[Startup]` & `[Profile1]` (`100%` PL, `+500 MHz` VRAM, flattened V/F curve `1,770-1,785 MHz @ 875 mV`, `FanMode=1`) plus `[Profile2]` (stock reset). To restore: close MSI Afterburner, copy `profiles/torre/msi-afterburner-rtx3080ti-fe-optimal.cfg` over the active `VEN_10DE&DEV_2208&SUBSYS_153510DE&REV_A1&BUS_*_DEV_0&FN_0.cfg` in `C:\Program Files (x86)\MSI Afterburner\Profiles\` (matching the GPU's current PCI bus ID, e.g. `BUS_10`), then relaunch MSI Afterburner.
 
 ## Windows 11 OS & LM Studio Host Settings
 - **Power Plan:** `Balanced` (after installing current AMD X570 Chipset Software + Ryzen Balanced PPM driver) with `PCI Express -> Link State Power Management = Off`.
