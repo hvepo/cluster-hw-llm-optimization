@@ -2,8 +2,11 @@
 """Cluster node LLM status, catalog, and prefix-safe load/unload helper for benchmarking & verification."""
 import argparse
 import json
+import os
 import subprocess
+import sys
 import time
+import urllib.request
 
 from cluster_lib import (
     api_request,
@@ -78,6 +81,20 @@ def collect_status(cfg, node_filter=None):
         except Exception as e:
             info["error"] = str(e)
         status["nodes"][node_name] = info
+
+    gw_cfg = cfg.get("gateway") or {}
+    gw_url = f"http://{gw_cfg.get('host', '127.0.0.1')}:{int(gw_cfg.get('port', 1235))}"
+    try:
+        with urllib.request.urlopen(gw_url + "/cluster/status", timeout=1.0) as r:
+            gw_st = json.loads(r.read().decode("utf-8", "replace"))
+        status["gateway"] = {
+            "reachable": True,
+            "url": gw_url,
+            "aliases": {k: v.get("resolved") for k, v in (gw_st.get("aliases") or {}).items()},
+            "torre_heavy_loaded": gw_st.get("torre_heavy_loaded", []),
+        }
+    except Exception:
+        status["gateway"] = {"reachable": False, "url": gw_url}
     return status
 
 
@@ -188,6 +205,59 @@ def cmd_unload(cfg, node_override=None, model_key=None, quiet=False):
     return unloaded
 
 
+def _load_torre_coresidency(cfg):
+    """Load Torre's verified 3-model 10.01 GiB stack: t-fast-agent (q8_0) + t-autocomplete-tab + embed."""
+    lmctl = os.path.join(os.path.dirname(os.path.abspath(__file__)), "llm", "lmctl_bench.py")
+    cmd_unload(cfg, node_override="torre", quiet=True)
+    subprocess.run(
+        [
+            sys.executable, lmctl, "load", "t-fast-agent", "--node", "torre",
+            "--context-length", "16384", "--parallel", "4", "--flash-attention", "true",
+            "--kv-quant", "q8_0", "--eval-batch-size", "2048", "--physical-batch-size", "512",
+            "--context-checkpoints", "32", "--enable-thinking", "false",
+        ],
+        stdin=subprocess.DEVNULL,
+        check=True,
+    )
+    subprocess.run(
+        [sys.executable, lmctl, "load", "t-autocomplete-tab", "--node", "torre", "--use-defaults", "--keep-loaded"],
+        stdin=subprocess.DEVNULL,
+        check=True,
+    )
+    if cfg.get("local_node") == "torre":
+        lms = resolve_lms_cli(cfg, node="torre")
+        subprocess.run([lms, "load", "text-embedding-t-embed-index", "-y"], stdin=subprocess.DEVNULL, check=True)
+    else:
+        api_request(node_url("torre", cfg), "POST", "/api/v1/models/load", {"model": "text-embedding-t-embed-index"}, timeout=120)
+
+
+def cmd_preset(cfg, name):
+    """Warm a verified cluster serving preset without altering permanent defaults."""
+    if name == "torre-fast":
+        _load_torre_coresidency(cfg)
+        return
+    if name == "torre-code":
+        cmd_load(cfg, "t-code-chat", node_override="torre")
+        return
+    if name == "portatil-away":
+        cmd_load(cfg, "p-code-moe", node_override="portatil")
+        return
+    if name == "home-dual":
+        _load_torre_coresidency(cfg)
+        try:
+            p_url = node_url("portatil", cfg)
+            p_models = get_api_models(p_url, timeout=5)
+            already = any(m.get("key") == "p-code-moe" and m.get("loaded_instances") for m in p_models)
+            if already:
+                print("[portatil] p-code-moe already loaded")
+            else:
+                cmd_load(cfg, "p-code-moe", node_override="portatil")
+        except Exception as exc:
+            print(f"[portatil] skipped remote warm-up (offline/unreachable: {exc})")
+        return
+    raise ValueError(f"Unknown preset {name!r}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Cluster node LLM status, catalog, and benchmark load/unload helper")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -211,6 +281,9 @@ def main():
     pu.add_argument("--node")
     pu.add_argument("--model")
 
+    pp = sub.add_parser("preset")
+    pp.add_argument("name", choices=("home-dual", "torre-fast", "torre-code", "portatil-away"))
+
     args = ap.parse_args()
     cfg = load_cluster_config()
 
@@ -222,6 +295,8 @@ def main():
         cmd_load(cfg, args.model_key, node_override=args.node, force_remote_rest=args.rest)
     elif args.cmd == "unload":
         cmd_unload(cfg, node_override=args.node, model_key=args.model)
+    elif args.cmd == "preset":
+        cmd_preset(cfg, args.name)
 
 
 if __name__ == "__main__":

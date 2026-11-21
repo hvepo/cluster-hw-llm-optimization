@@ -51,6 +51,8 @@ Full methodology and per-model tables in [docs/BENCHMARKS.md](docs/BENCHMARKS.md
 | Component | Path | Purpose |
 |---|---|---|
 | **Skills (3)** | `skills/{hw-node-profiler,llm-node-finetune,cluster-install-migrate}` | Phase 1 hardware/BIOS/driver profiling, Phase 2 per-node LLM fine-tuning, and cross-OS migration |
+| **5-Protocol Cluster Gateway** | `tools/gateway/{cluster_gateway.py,gateway_ctl.py,cluster_chat.py}` | Exposes unified LM Link pool (`127.0.0.1:1235`) across LM Studio `/api/v1/*`, OpenAI `/v1/*`, Responses, and Anthropic `/v1/messages` with `cluster/*` failover & anti-thrash routing |
+| **Client Provisioner** | `scripts/setup_clients.py` (`--serving`) | Configures OpenCode, VS Code Copilot BYOK, Continue, LM Studio `mcp.json`, and Windows/WSL shell helpers |
 | **Stdio MCP Server (7 tools, 3 resources)** | `mcp/cluster_mcp_server.py` (`cluster-hw-llm`) | `hw_node_profile` · `hw_gpu_telemetry` · `hw_event_log_check` · `llm_compute_ceiling` · `node_llm_status` · `node_best_configs` · `node_llm_control` |
 | **Antigravity Plugin & Hooks** | `plugins/cluster-hw-llm-optimization/` | `PreToolUse` default-config & LM Link safety guard + `SessionStart` node context |
 | **Universal Rules** | `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md` | Cross-agent hardware & LLM benchmarking guardrails |
@@ -59,19 +61,19 @@ Full methodology and per-model tables in [docs/BENCHMARKS.md](docs/BENCHMARKS.md
 
 ## Quick Start & Migration (Any OS × Client Combination)
 
-### Ubuntu WSL / Linux (auto-bridges to Windows host on dual Windows+WSL machines)
+### Ubuntu WSL / Linux (auto-bridges to Windows + configures Gateway & Clients with `--serving`)
 ```bash
-bash install.sh --node <node_name> --os auto --targets agy,opencode,vscode --doctor
+bash install.sh --node <node_name> --os auto --targets agy,opencode,vscode --serving --doctor
 ```
 
-### Windows PowerShell (auto-bridges to WSL when available, or falls back to WSL Python)
+### Windows PowerShell (auto-bridges to WSL + configures Gateway & Clients with `-Serving`)
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Node <node_name> -Os auto -Targets agy,opencode,vscode -Doctor
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Node <node_name> -Os auto -Targets agy,opencode,vscode -Serving -Doctor
 ```
 
 ### Specific Combinations (`--os windows|wsl|linux|all` × `--targets agy,vscode,opencode`)
 ```bash
-python3 scripts/install.py --os windows,wsl --targets agy,vscode,opencode --doctor
+python3 scripts/install.py --os windows,wsl --targets agy,vscode,opencode --serving --doctor
 ```
 
 ### Self-Test & Privacy Gate
@@ -80,7 +82,7 @@ python3 scripts/doctor.py --all --check-privacy
 python3 scripts/doctor.py --all --check-privacy --live
 ```
 
-See [docs/MIGRATION.md](docs/MIGRATION.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and [PROMPT.md](PROMPT.md) for copy-ready hardware profiling and LLM fine-tuning prompts.
+See [docs/CLIENT_SETUP.md](docs/CLIENT_SETUP.md), [docs/MIGRATION.md](docs/MIGRATION.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and [PROMPT.md](PROMPT.md) for using the unified `cluster/*` pool across every IDE/agent and copy-ready tuning prompts.
 
 ## License
 MIT ([LICENSE](LICENSE)) — retains upstream MIT notice for `sybil-solutions/inference-optimisation-skill`.

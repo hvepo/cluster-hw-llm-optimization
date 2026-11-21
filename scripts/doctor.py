@@ -324,6 +324,323 @@ def check_install_matrix():
     print("[PASS] Install/Uninstall matrix verified across {windows, wsl} x {agy, vscode, opencode} + wsl.exe fallback")
 
 
+def check_gateway_and_clients():
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    sys.path.insert(0, os.path.join(REPO_ROOT, "tools", "gateway"))
+    import cluster_gateway  # noqa: E402
+
+    mock_state = {
+        "torre_online": True,
+        "portatil_online": True,
+        "loaded": set(),
+        "calls": [],
+        "resp_counter": 0,
+    }
+
+    def current_models():
+        ms = []
+        if mock_state["torre_online"]:
+            for k, ctx in (
+                ("t-code-chat", 32768),
+                ("t-general-agent", 32768),
+                ("t-fast-agent", 32768),
+                ("t-vision-context", 131072),
+                ("t-math-physics", 16384),
+                ("t-deep-reasoning", 131072),
+                ("t-autocomplete-tab", 32768),
+                ("t-draft-coder", 32768),
+                ("text-embedding-t-embed-index", 2048),
+                ("text-embedding-nomic-embed-text-v1.5", 2048),
+            ):
+                ms.append({
+                    "type": "embedding" if "embedding" in k else "llm",
+                    "key": k,
+                    "architecture": "qwen2",
+                    "max_context_length": ctx,
+                    "loaded_instances": [{"id": k, "config": {"context_length": ctx}}] if k in mock_state["loaded"] else [],
+                })
+        if mock_state["portatil_online"]:
+            for k, ctx in (
+                ("p-code-moe", 262144),
+                ("p-agent-moe-alt", 32768),
+                ("p-agent-moe", 262144),
+                ("p-battery-chat", 32768),
+                ("p-autocomplete-tab", 32768),
+                ("p-draft-gemma-moe-mtp", 131072),
+                ("text-embedding-p-embed-index", 2048),
+            ):
+                ms.append({
+                    "type": "embedding" if "embedding" in k else "llm",
+                    "key": k,
+                    "architecture": "qwen3moe",
+                    "max_context_length": ctx,
+                    "loaded_instances": [{"id": k, "config": {"context_length": ctx}}] if k in mock_state["loaded"] else [],
+                })
+        return ms
+
+    class MockUpstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *_):
+            return
+
+        def do_GET(self):
+            if self.path == "/api/v1/models":
+                raw = json.dumps({"models": current_models()}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or "0")
+            body = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+            mock_state["calls"].append((self.path, body))
+            if self.path == "/api/v1/models/load":
+                mk = body["model"]
+                mock_state["loaded"].add(mk)
+                raw = json.dumps({"instance_id": mk, "status": "loaded", "load_config": body}).encode("utf-8")
+            elif self.path == "/api/v1/models/unload":
+                iid = body["instance_id"]
+                mock_state["loaded"].discard(iid)
+                raw = json.dumps({"instance_id": iid}).encode("utf-8")
+            elif self.path == "/api/v1/chat":
+                mock_state["resp_counter"] += 1
+                rid = f"resp_lms_{mock_state['resp_counter']}"
+                if body.get("stream"):
+                    chunks = [
+                        b'event: message.delta\ndata: {"type":"message.delta","content":"ok"}\n\n',
+                        f'event: chat.end\ndata: {{"type":"chat.end","result":{{"response_id":"{rid}","stats":{{"tokens_per_second":50.0}}}}}}\n\n'.encode("utf-8"),
+                    ]
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    for ch in chunks:
+                        self.wfile.write(ch)
+                        self.wfile.flush()
+                    return
+                raw = json.dumps({"response_id": rid, "model_instance_id": body["model"], "output": [{"type": "message", "content": "ok"}]}).encode("utf-8")
+            elif self.path == "/v1/responses":
+                mock_state["resp_counter"] += 1
+                rid = f"resp_oai_{mock_state['resp_counter']}"
+                raw = json.dumps({"id": rid, "model": body["model"], "output": []}).encode("utf-8")
+            elif self.path == "/v1/messages":
+                raw = json.dumps({"id": "msg_1", "type": "message", "model": body["model"], "content": [{"type": "text", "text": "ok"}]}).encode("utf-8")
+            elif self.path == "/v1/embeddings":
+                raw = json.dumps({"object": "list", "model": body["model"], "data": [{"embedding": [0.1, 0.2], "index": 0}]}).encode("utf-8")
+            elif self.path == "/v1/chat/completions":
+                if body.get("stream"):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n')
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+                    return
+                raw = json.dumps({"id": "chatcmpl_1", "model": body["model"], "choices": [{"message": {"role": "assistant", "content": "ok"}}]}).encode("utf-8")
+            else:
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    up_srv = ThreadingHTTPServer(("127.0.0.1", 0), MockUpstream)
+    up_port = up_srv.server_address[1]
+    t_up = threading.Thread(target=up_srv.serve_forever, daemon=True)
+    t_up.start()
+
+    old_env = os.environ.get("CLUSTER_GATEWAY_LOAD_VIA_REST")
+    os.environ["CLUSTER_GATEWAY_LOAD_VIA_REST"] = "1"
+    router = cluster_gateway.ClusterRouter(upstream_url=f"http://127.0.0.1:{up_port}", repo_root=REPO_ROOT, cache_ttl=0.0)
+    gw_srv = cluster_gateway.ClusterGatewayServer(("127.0.0.1", 0), router)
+    gw_port = gw_srv.server_address[1]
+    t_gw = threading.Thread(target=gw_srv.serve_forever, daemon=True)
+    t_gw.start()
+    gw_base = f"http://127.0.0.1:{gw_port}"
+
+    def req_json(method, path, payload=None):
+        data = None if payload is None else json.dumps(payload).encode("utf-8")
+        hdrs = {"Content-Type": "application/json"} if payload is not None else {}
+        rq = urllib.request.Request(gw_base + path, data=data, headers=hdrs, method=method)
+        with urllib.request.urlopen(rq, timeout=5) as r:
+            return r.status, dict(r.headers), json.loads(r.read().decode("utf-8"))
+
+    try:
+        # 1. Discovery + draft filtering + Option B tuned contexts
+        _, _, h = req_json("GET", "/health")
+        assert h["ok"] and h["upstream_reachable"]
+        _, _, oai_m = req_json("GET", "/v1/models")
+        oai_ids = {m["id"]: m for m in oai_m["data"]}
+        assert "cluster/code" in oai_ids and oai_ids["cluster/code"]["resolved_model"] == "p-code-moe"
+        assert oai_ids["cluster/code"]["context_length"] == 16384
+        assert oai_ids["cluster/code-fast"]["resolved_model"] == "t-code-chat"
+        assert oai_ids["cluster/code-fast"]["context_length"] == 12288
+        assert "t-draft-coder" not in oai_ids and "p-draft-gemma-moe-mtp" not in oai_ids
+        assert "text-embedding-nomic-embed-text-v1.5" not in oai_ids
+
+        _, _, lms_m = req_json("GET", "/api/v1/models")
+        lms_by_k = {m["key"]: m for m in lms_m["models"]}
+        assert lms_by_k["t-code-chat"]["max_context_length"] == 12288
+        assert lms_by_k["p-agent-moe"]["max_context_length"] == 32768
+        _, _, v0_m = req_json("GET", "/api/v0/models")
+        assert any(m["id"] == "cluster/code" for m in v0_m["data"])
+
+        # 2. All 5 protocol roundtrips + reasoning injection + SSE + stateful previous_response_id pin
+        _, hdr1, d1 = req_json("POST", "/v1/chat/completions", {"model": "cluster/fast-agent", "messages": [{"role": "user", "content": "hi"}]})
+        assert hdr1["X-Cluster-Resolved-Model"] == "t-fast-agent"
+        assert mock_state["calls"][-1][1].get("reasoning_effort") == "none"
+
+        _, hdr_m, _ = req_json("POST", "/v1/messages", {"model": "cluster/code", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]})
+        assert hdr_m["X-Cluster-Resolved-Model"] == "p-code-moe"
+
+        _, hdr_r, resp_oai = req_json("POST", "/v1/responses", {"model": "cluster/code-fast", "input": "hi"})
+        assert hdr_r["X-Cluster-Resolved-Model"] == "t-code-chat"
+        assert resp_oai["id"].startswith("resp_oai_")
+
+        # Streaming native /api/v1/chat with MCP integration + response_id pin
+        rq_sse = urllib.request.Request(
+            gw_base + "/api/v1/chat",
+            data=json.dumps({"model": "cluster/code", "input": "hi", "stream": True, "integrations": ["mcp/browse"]}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(rq_sse, timeout=5) as rs:
+            assert rs.headers.get("X-Cluster-Resolved-Model") == "p-code-moe"
+            sse_txt = rs.read().decode("utf-8")
+            assert "chat.end" in sse_txt
+        assert mock_state["calls"][-1][1]["integrations"] == ["mcp/browse"]
+        m_pin = re.search(r'"response_id":"([^"]+)"', sse_txt)
+        assert m_pin, f"Missing response_id in SSE: {sse_txt}"
+        pinned_id = m_pin.group(1)
+
+        # 3. Anti-thrash diversion + Failover + Session Pin preservation
+        mock_state["loaded"].add("t-code-chat")
+        _, _, st_div = req_json("GET", "/cluster/status")
+        assert st_div["aliases"]["cluster/autocomplete"]["resolved"] == "p-autocomplete-tab"
+        assert st_div["aliases"]["cluster/autocomplete"]["anti_thrash_diverted"] is True
+        assert st_div["aliases"]["cluster/embed"]["resolved"] == "text-embedding-p-embed-index"
+
+        # Even if portatil goes offline, previous_response_id remains pinned if still listed or fails over when requested fresh
+        mock_state["portatil_online"] = False
+        _, hdr_fb, _ = req_json("POST", "/v1/chat/completions", {"model": "cluster/code", "messages": [{"role": "user", "content": "hi"}]})
+        assert hdr_fb["X-Cluster-Resolved-Model"] == "t-code-chat"
+
+        mock_state["portatil_online"] = True
+        _, hdr_pin, _ = req_json("POST", "/api/v1/chat", {"model": "cluster/code-fast", "input": "follow-up", "previous_response_id": pinned_id})
+        assert hdr_pin["X-Cluster-Resolved-Model"] == "p-code-moe"
+
+        mock_state["torre_online"] = False
+        _, hdr_tfb, _ = req_json("POST", "/v1/chat/completions", {"model": "cluster/fast-agent", "messages": [{"role": "user", "content": "hi"}]})
+        assert hdr_tfb["X-Cluster-Resolved-Model"] == "p-battery-chat"
+        mock_state["torre_online"] = True
+
+        # 4. Safe /api/v1/models/load guardrails + alias unload
+        try:
+            req_json("POST", "/api/v1/models/load", {"model": "t-code-chat", "k_cache_quant": "f16"})
+            raise AssertionError("Expected 400 unsafe VRAM config rejection")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
+        try:
+            req_json("POST", "/api/v1/models/load", {"model": "t-math-physics", "v_cache_quant": "q8_0"})
+            raise AssertionError("Expected 400 phi3 V=q8_0 rejection")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
+
+        _, _, ld_ok = req_json("POST", "/api/v1/models/load", {"model": "cluster/fast-agent", "parallel": 2})
+        assert ld_ok["instance_id"] == "t-fast-agent"
+        assert ld_ok["load_config"]["flash_attention"] is True
+        _, _, un_ok = req_json("POST", "/api/v1/models/unload", {"instance_id": "cluster/fast-agent"})
+        assert un_ok["instance_id"] == "t-fast-agent"
+    finally:
+        gw_srv.shutdown()
+        gw_srv.server_close()
+        up_srv.shutdown()
+        up_srv.server_close()
+        if old_env is None:
+            os.environ.pop("CLUSTER_GATEWAY_LOAD_VIA_REST", None)
+        else:
+            os.environ["CLUSTER_GATEWAY_LOAD_VIA_REST"] = old_env
+
+    # 5. Sandboxed setup_clients.py non-destructive install & uninstall test
+    setup_script = os.path.join(REPO_ROOT, "scripts", "setup_clients.py")
+    with tempfile.TemporaryDirectory() as tmp:
+        posix_home = os.path.join(tmp, "posix_home")
+        win_home = os.path.join(tmp, "win_home")
+        win_app = os.path.join(win_home, "AppData", "Roaming")
+        os.makedirs(os.path.join(posix_home, ".config", "opencode"), exist_ok=True)
+        os.makedirs(os.path.join(posix_home, ".continue"), exist_ok=True)
+        os.makedirs(os.path.join(posix_home, ".lmstudio"), exist_ok=True)
+        os.makedirs(os.path.join(win_app, "Code", "User"), exist_ok=True)
+        os.makedirs(os.path.join(win_home, ".lmstudio"), exist_ok=True)
+
+        with open(os.path.join(posix_home, ".config", "opencode", "opencode.json"), "w", encoding="utf-8") as f:
+            json.dump({"mcp": {"servers": {"other-oc": {"type": "local", "command": ["node"]}}}}, f)
+        with open(os.path.join(win_app, "Code", "User", "chatLanguageModels.json"), "w", encoding="utf-8") as f:
+            json.dump([
+                {"name": "Google", "vendor": "gemini", "apiKey": "${input:keep}"},
+                {"name": "lmstudio", "vendor": "customendpoint", "models": [{"id": "", "name": "", "url": ""}]},
+            ], f)
+        with open(os.path.join(win_home, ".lmstudio", "mcp.json"), "w", encoding="utf-8") as f:
+            json.dump({"mcpServers": {"browse": {"command": "browse.exe", "args": ["mcp"]}}}, f)
+
+        env = dict(os.environ)
+        env["CLUSTER_INSTALL_POSIX_HOME"] = posix_home
+        env["CLUSTER_INSTALL_WIN_HOME"] = win_home
+        env["CLUSTER_INSTALL_WIN_APPDATA"] = win_app
+
+        r1 = subprocess.run(
+            [sys.executable, setup_script, "--os", "windows,wsl", "--clients", "all"],
+            stdin=subprocess.DEVNULL, env=env, text=True, capture_output=True, timeout=20,
+        )
+        assert r1.returncode == 0, f"setup_clients failed: {r1.stderr or r1.stdout}"
+
+        oc_d = json.load(open(os.path.join(posix_home, ".config", "opencode", "opencode.json"), encoding="utf-8"))
+        assert "other-oc" in oc_d["mcp"]["servers"]
+        assert oc_d["provider"]["cluster"]["options"]["baseURL"] == "http://127.0.0.1:1235/v1"
+        assert "code" in oc_d["provider"]["cluster"]["models"]
+        assert oc_d["provider"]["cluster"]["models"]["code"]["id"] == "cluster/code"
+
+        byok = json.load(open(os.path.join(win_app, "Code", "User", "chatLanguageModels.json"), encoding="utf-8"))
+        names = [x.get("name") for x in byok]
+        assert "Google" in names and "Local Cluster (LM Link)" in names and "lmstudio" not in names
+
+        lms_mcp = json.load(open(os.path.join(win_home, ".lmstudio", "mcp.json"), encoding="utf-8"))
+        assert "browse" in lms_mcp["mcpServers"] and "cluster-hw-llm" in lms_mcp["mcpServers"]
+        assert os.path.isfile(os.path.join(posix_home, ".config", "cluster-llm", "env.sh"))
+        assert os.path.isfile(os.path.join(win_home, ".config", "cluster-llm", "env.ps1"))
+        assert "cluster/autocomplete" in open(os.path.join(win_home, ".continue", "config.yaml"), encoding="utf-8").read()
+
+        r2 = subprocess.run(
+            [sys.executable, setup_script, "--os", "windows,wsl", "--clients", "all", "--uninstall"],
+            stdin=subprocess.DEVNULL, env=env, text=True, capture_output=True, timeout=20,
+        )
+        assert r2.returncode == 0, f"setup_clients uninstall failed: {r2.stderr}"
+        oc_d2 = json.load(open(os.path.join(posix_home, ".config", "opencode", "opencode.json"), encoding="utf-8"))
+        assert "other-oc" in oc_d2["mcp"]["servers"] and "provider" not in oc_d2
+        byok2 = json.load(open(os.path.join(win_app, "Code", "User", "chatLanguageModels.json"), encoding="utf-8"))
+        assert [x.get("name") for x in byok2] == ["Google"]
+        lms_mcp2 = json.load(open(os.path.join(win_home, ".lmstudio", "mcp.json"), encoding="utf-8"))
+        assert list(lms_mcp2["mcpServers"].keys()) == ["browse"]
+
+    print("[PASS] 5-protocol Cluster Gateway (failover, anti-thrash, SSE, /api/v1/chat pin) + client provisioner verified")
+
+
 def check_privacy(files):
     generic_patterns = [
         ("tailscale_cgnat_ip", re.compile(r"\b100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b")),
@@ -384,6 +701,7 @@ def main():
         mcp_roundtrip("lsp", live=False)
         check_hooks()
         check_install_matrix()
+        check_gateway_and_clients()
     if args.check_privacy:
         check_privacy(files)
     if args.live:

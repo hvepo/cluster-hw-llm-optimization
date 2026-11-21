@@ -501,6 +501,8 @@ def main(argv=None):
     ap.add_argument("--torre-url", default="", help="Override nodes.torre.base_url in cluster.local.json")
     ap.add_argument("--portatil-url", default="", help="Override nodes.portatil.base_url in cluster.local.json")
     ap.add_argument("--win-use-wsl-python", action="store_true", help="Configure Windows targets to bridge via wsl.exe -e python3")
+    ap.add_argument("--serving", "--with-gateway", dest="serving", action="store_true", help="Configure Cluster Router Gateway (:1235), autostart, and IDE/CLI clients")
+    ap.add_argument("--clients", default="all", help="Clients for --serving (default: all -> opencode,vscode,continue,lmstudio,env)")
     ap.add_argument("--dry-run", action="store_true", help="Print actions without modifying files")
     ap.add_argument("--uninstall", action="store_true", help="Remove installed global plugin/MCP/skills entries")
     ap.add_argument("--doctor", action="store_true", help="Run scripts/doctor.py after installation")
@@ -569,6 +571,32 @@ def main(argv=None):
                         return r.returncode
                 else:
                     print(f"[warn] POSIX/WSL environment not reachable for --os {os_tag}; skipping", file=sys.stderr)
+
+    if args.serving:
+        setup_script = os.path.join(REPO_ROOT, "scripts", "setup_clients.py")
+        gw_ctl = os.path.join(REPO_ROOT, "tools", "gateway", "gateway_ctl.py")
+        sc_args = [sys.executable, setup_script, "--os", args.os_targets, "--clients", args.clients]
+        if args.win_use_wsl_python:
+            sc_args.append("--win-use-wsl-python")
+        if args.dry_run:
+            sc_args.append("--dry-run")
+        if args.uninstall:
+            sc_args.append("--uninstall")
+        r = subprocess.run(sc_args, stdin=subprocess.DEVNULL)
+        if r.returncode != 0:
+            return r.returncode
+
+        if args.uninstall:
+            if not args.dry_run:
+                subprocess.run([sys.executable, gw_ctl, "stop"], stdin=subprocess.DEVNULL)
+                subprocess.run([sys.executable, gw_ctl, "uninstall-autostart"], stdin=subprocess.DEVNULL)
+        else:
+            if args.dry_run:
+                subprocess.run([sys.executable, gw_ctl, "install-autostart", "--dry-run"], stdin=subprocess.DEVNULL)
+            else:
+                subprocess.run([sys.executable, gw_ctl, "install-autostart"], stdin=subprocess.DEVNULL, check=True)
+                subprocess.run([sys.executable, gw_ctl, "restart"], stdin=subprocess.DEVNULL, check=True)
+                subprocess.run([sys.executable, gw_ctl, "check-lmlink"], stdin=subprocess.DEVNULL)
 
     if args.doctor and not args.dry_run and not args.uninstall:
         doctor_script = os.path.join(REPO_ROOT, "scripts", "doctor.py")

@@ -15,6 +15,8 @@ param(
     [string]$TorreUrl = "",
     [string]$PortatilUrl = "",
     [switch]$WinUseWslPython,
+    [switch]$Serving,
+    [string]$Clients = "all",
     [switch]$DryRun,
     [switch]$Uninstall,
     [switch]$Doctor
@@ -57,6 +59,7 @@ if ($Node) { $pyArgs += @("--node", $Node) }
 if ($TorreUrl) { $pyArgs += @("--torre-url", $TorreUrl) }
 if ($PortatilUrl) { $pyArgs += @("--portatil-url", $PortatilUrl) }
 if ($WinUseWslPython) { $pyArgs += "--win-use-wsl-python" }
+if ($Serving) { $pyArgs += @("--serving", "--clients", $Clients) }
 if ($DryRun) { $pyArgs += "--dry-run" }
 if ($Uninstall) { $pyArgs += "--uninstall" }
 if ($Doctor) { $pyArgs += "--doctor" }

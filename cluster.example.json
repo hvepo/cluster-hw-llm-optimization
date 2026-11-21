@@ -2,6 +2,12 @@
   "schema_version": 1,
   "cluster_name": "cluster-hw-llm-optimization",
   "local_node": "torre",
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 1235,
+    "upstream_url": "http://127.0.0.1:1234",
+    "code_profile": "smart-first"
+  },
   "nodes": {
     "torre": {
       "label": "torre",

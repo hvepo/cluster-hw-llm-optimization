@@ -14,22 +14,26 @@ Deploy the hardware profiler and LLM fine-tuning toolkit on any cluster node (`t
 
 ## Universal Install Commands (`scripts/install.py`, `install.sh`, `install.ps1`)
 
-1. **From Ubuntu WSL / Linux (auto-bridges to Windows host on dual Windows+WSL machines):**
+1. **From Ubuntu WSL / Linux (auto-bridges to Windows + Gateway & IDE/CLI clients with `--serving`):**
    ```bash
-   bash install.sh --node <node_name> --os auto --targets agy,opencode,vscode --doctor
+   bash install.sh --node <node_name> --os auto --targets agy,opencode,vscode --serving --doctor
    ```
-2. **From Windows PowerShell (auto-bridges to WSL when present):**
+2. **From Windows PowerShell (auto-bridges to WSL + Gateway & IDE/CLI clients with `-Serving`):**
    ```powershell
-   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Node <node_name> -Os auto -Targets agy,opencode,vscode -Doctor
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Node <node_name> -Os auto -Targets agy,opencode,vscode -Serving -Doctor
    ```
-3. **Target Specific Combinations (`--os` × `--targets`):**
+3. **Update an existing machine after `git pull` (preserves `local_node` in `cluster.local.json`):**
+   ```bash
+   git pull && bash install.sh --os auto --targets agy,opencode,vscode --serving --doctor
+   ```
+4. **Target Specific Combinations (`--os` × `--targets`):**
    ```bash
    # Only WSL + OpenCode & VS Code
    python3 scripts/install.py --os wsl --targets opencode,vscode
    # Only Windows + Antigravity, VS Code, & OpenCode (runnable from either Windows or WSL!)
    python3 scripts/install.py --os windows --targets agy,vscode,opencode
-   # Both Windows and WSL + all 3 clients
-   python3 scripts/install.py --os all --targets all --doctor
+   # Both Windows and WSL + all 3 clients + serving gateway
+   python3 scripts/install.py --os all --targets all --serving --doctor
    ```
 
 ## Verification & Privacy Gate

@@ -28,8 +28,11 @@ Both `install.sh` and `install.ps1` delegate to `scripts/install.py` and accept 
 git clone <YOUR_REPO_URL> ~/projects/cluster-hw-llm-optimization
 cd ~/projects/cluster-hw-llm-optimization
 
-# Install for WSL + auto-bridge to Windows host (all 3 clients: Antigravity, OpenCode, VS Code)
-bash install.sh --node torre --os auto --targets agy,opencode,vscode --doctor
+# Install for WSL + auto-bridge to Windows host + Gateway & IDE/CLI clients:
+bash install.sh --node torre --os auto --targets agy,opencode,vscode --serving --doctor
+
+# Or update an existing node (preserving local_node in cluster.local.json):
+git pull && bash install.sh --os auto --targets agy,opencode,vscode --serving --doctor
 
 # Or restrict strictly to WSL and specific clients:
 bash install.sh --node portatil --os wsl --targets opencode,vscode --doctor
@@ -43,11 +46,16 @@ Run from native PowerShell inside the cloned repo (or via `\\wsl.localhost\Ubunt
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
-.\install.ps1 -Node torre -Os auto -Targets agy,opencode,vscode -Doctor
+.\install.ps1 -Node torre -Os auto -Targets agy,opencode,vscode -Serving -Doctor
+
+# Or update an existing node (e.g. portatil after git pull):
+git pull
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Os auto -Targets agy,opencode,vscode -Serving -Doctor
 ```
 
 - Auto-detects Windows `python.exe` (preferring `%LOCALAPPDATA%\Python\bin\python.exe` or `py -3`).
 - If native Windows `python.exe` is not installed on the Windows host, automatically falls back to a `wsl.exe -e python3` bridge so Windows Antigravity, Windows VS Code, and Windows OpenCode still run all MCP tools and hooks seamlessly.
+- Passing `-Serving` / `--serving` also installs and starts the 5-protocol **Cluster Router Gateway (`http://127.0.0.1:1235`)** with silent logon autostart and configures OpenCode, VS Code Copilot BYOK, Continue, LM Studio `mcp.json`, and Windows/WSL shell helpers (see [docs/CLIENT_SETUP.md](CLIENT_SETUP.md)).
 
 > [!NOTE]
 > Antigravity picks up newly installed/updated plugins live or on next turn without needing to hand-edit `config.json`. Never edit `~/.gemini/config/config.json` manually; manage plugin enable/disable via UI (`customization://cluster-hw-llm-optimization`) or `agy plugin enable|disable`.
