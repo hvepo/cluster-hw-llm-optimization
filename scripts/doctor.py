@@ -529,12 +529,25 @@ def check_gateway_and_clients():
         assert m_pin, f"Missing response_id in SSE: {sse_txt}"
         pinned_id = m_pin.group(1)
 
-        # 3. Anti-thrash diversion + Failover + Session Pin preservation
+        # 3. Anti-thrash diversion (on torre) + local-first (on portatil) + Failover + Session Pin preservation
         mock_state["loaded"].add("t-code-chat")
-        _, _, st_div = req_json("GET", "/cluster/status")
-        assert st_div["aliases"]["cluster/autocomplete"]["resolved"] == "p-autocomplete-tab"
-        assert st_div["aliases"]["cluster/autocomplete"]["anti_thrash_diverted"] is True
-        assert st_div["aliases"]["cluster/embed"]["resolved"] == "text-embedding-p-embed-index"
+        orig_local = router.local_node
+        try:
+            router.local_node = "torre"
+            _, _, st_div = req_json("GET", "/cluster/status")
+            assert st_div["aliases"]["cluster/autocomplete"]["resolved"] == "p-autocomplete-tab"
+            assert st_div["aliases"]["cluster/autocomplete"]["anti_thrash_diverted"] is True
+            assert st_div["aliases"]["cluster/embed"]["resolved"] == "text-embedding-p-embed-index"
+            assert st_div["aliases"]["cluster/embed"]["anti_thrash_diverted"] is True
+
+            router.local_node = "portatil"
+            _, _, st_port = req_json("GET", "/cluster/status")
+            assert st_port["aliases"]["cluster/autocomplete"]["resolved"] == "p-autocomplete-tab"
+            assert st_port["aliases"]["cluster/autocomplete"]["anti_thrash_diverted"] is False
+            assert st_port["aliases"]["cluster/embed"]["resolved"] == "text-embedding-p-embed-index"
+            assert st_port["aliases"]["cluster/embed"]["anti_thrash_diverted"] is False
+        finally:
+            router.local_node = orig_local
 
         # Even if portatil goes offline, previous_response_id remains pinned if still listed or fails over when requested fresh
         mock_state["portatil_online"] = False
