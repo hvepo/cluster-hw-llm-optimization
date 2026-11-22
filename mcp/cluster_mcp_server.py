@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Zero-dependency Python 3 Stdio MCP server for cluster-hw-llm-optimization.
 
-Focused strictly on:
+Focused on:
 1. Hardware, BIOS, Driver, and Stability inspection of any cluster device.
 2. Per-node LLM ceiling computation, benchmark inspection, and default-safe load/unload for tuning.
+3. Listing and delegating prompts to unified `cluster/*` role aliases via the Cluster Router Gateway (:1235).
 """
 import json
 import os
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TOOLS_DIR = os.path.join(REPO_ROOT, "tools")
@@ -22,7 +25,7 @@ import cluster_lib  # noqa: E402
 import gpu_oc_verify  # noqa: E402
 import hardware_probe  # noqa: E402
 
-SERVER_INFO = {"name": "cluster-hw-llm", "version": "1.1.0"}
+SERVER_INFO = {"name": "cluster-hw-llm", "version": "1.2.0"}
 
 TOOLS = [
     {
@@ -102,6 +105,34 @@ TOOLS = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "cluster_models",
+        "description": "List unified cluster/* virtual role aliases on the Cluster Router Gateway (:1235), their live resolved model & node (torre vs portatil), context length, loaded status, and active failover/anti-thrash routing.",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "cluster_chat",
+        "description": "Delegate a prompt or follow-up turn to a local cluster/* model alias (e.g. cluster/code, cluster/fast-agent, cluster/reasoning, cluster/vision-heavy) via the Cluster Router Gateway /api/v1/chat endpoint.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "User prompt to send to the selected cluster model."},
+                "model": {"type": "string", "default": "cluster/code", "description": "Virtual alias (cluster/*) or concrete t-*/p-* model ID (default: cluster/code)."},
+                "system_prompt": {"type": "string", "description": "Optional system instruction."},
+                "reasoning": {"type": "string", "enum": ["off", "low", "medium", "high", "on"], "description": "Optional reasoning mode override."},
+                "previous_response_id": {"type": "string", "description": "Optional response_id from a prior turn to continue stateful chat pinned to the same node."},
+                "integrations": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional LM Studio MCP integrations (e.g. ['mcp/browse'] or ['browse']).",
+                },
+                "store": {"type": "boolean", "default": True, "description": "Whether LM Studio should store conversation state for previous_response_id chaining."},
+                "timeout_s": {"type": "integer", "minimum": 10, "maximum": 600, "default": 180},
+            },
+            "required": ["prompt"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 RESOURCES = [
@@ -125,6 +156,130 @@ def check_events_hours(hours=24):
     if r.returncode != 0 or not r.stdout.strip():
         return {"error": (r.stderr or r.stdout).strip()}
     return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def _gateway_base_url(cfg):
+    env_url = os.environ.get("CLUSTER_GATEWAY_URL")
+    if env_url:
+        return env_url.rstrip("/")
+    gw = cfg.get("gateway") or {}
+    host = gw.get("host") or "127.0.0.1"
+    port = int(gw.get("port") or 1235)
+    return f"http://{host}:{port}"
+
+
+def _extract_output_text(output_items, target_type):
+    parts = []
+    for item in output_items or []:
+        if not isinstance(item, dict) or item.get("type") != target_type:
+            continue
+        content = item.get("content")
+        if isinstance(content, str) and content:
+            parts.append(content)
+        elif isinstance(content, list):
+            for chunk in content:
+                if isinstance(chunk, dict):
+                    txt = chunk.get("text") or chunk.get("content") or ""
+                    if txt:
+                        parts.append(txt)
+                elif isinstance(chunk, str) and chunk:
+                    parts.append(chunk)
+    return "".join(parts)
+
+
+def _call_cluster_models(cfg):
+    gw_base = _gateway_base_url(cfg)
+    try:
+        req = urllib.request.Request(gw_base + "/cluster/status", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")
+        return {
+            "ok": False,
+            "gateway_url": gw_base,
+            "error": f"HTTP {exc.code}: {body or exc.reason}",
+            "hint": "Start the Cluster Router Gateway with: python3 tools/gateway/gateway_ctl.py start",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "gateway_url": gw_base,
+            "error": str(exc),
+            "hint": "Start the Cluster Router Gateway with: python3 tools/gateway/gateway_ctl.py start",
+        }
+
+
+def _call_cluster_chat(cfg, args):
+    gw_base = _gateway_base_url(cfg)
+    model = args.get("model") or "cluster/code"
+    prompt = args["prompt"]
+    payload = {
+        "model": model,
+        "input": prompt,
+        "stream": False,
+        "store": args.get("store", True),
+    }
+    if args.get("system_prompt"):
+        payload["system_prompt"] = args["system_prompt"]
+    if args.get("reasoning"):
+        payload["reasoning"] = args["reasoning"]
+    if args.get("previous_response_id"):
+        payload["previous_response_id"] = args["previous_response_id"]
+    if args.get("integrations"):
+        payload["integrations"] = [
+            m if (not isinstance(m, str) or m.startswith(("mcp/", "ephemeral_mcp"))) else f"mcp/{m}"
+            for m in args["integrations"]
+        ]
+
+    timeout_s = int(args.get("timeout_s") or 180)
+    try:
+        req = urllib.request.Request(
+            gw_base + "/api/v1/chat",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+            data = json.loads(raw) if raw.strip() else {}
+            resolved_model = resp.headers.get("X-Cluster-Resolved-Model") or data.get("model_instance_id") or model
+            resolved_node = resp.headers.get("X-Cluster-Node") or cluster_lib.node_for_model(resolved_model, cfg) or ""
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")
+        return {
+            "ok": False,
+            "gateway_url": gw_base,
+            "model_requested": model,
+            "error": f"HTTP {exc.code}: {body or exc.reason}",
+            "hint": "Start the Cluster Router Gateway with: python3 tools/gateway/gateway_ctl.py start",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "gateway_url": gw_base,
+            "model_requested": model,
+            "error": str(exc),
+            "hint": "Start the Cluster Router Gateway with: python3 tools/gateway/gateway_ctl.py start",
+        }
+
+    out_items = data.get("output") or []
+    text = _extract_output_text(out_items, "message")
+    reasoning_txt = _extract_output_text(out_items, "reasoning")
+    result = {
+        "ok": True,
+        "model_requested": model,
+        "resolved_model": resolved_model,
+        "resolved_node": resolved_node,
+        "response_id": data.get("response_id"),
+        "text": text,
+        "stats": data.get("stats") or {},
+    }
+    if data.get("model_instance_id"):
+        result["model_instance_id"] = data["model_instance_id"]
+    if reasoning_txt:
+        result["reasoning"] = reasoning_txt
+    return result
 
 
 def handle_tool(name, args):
@@ -168,6 +323,10 @@ def handle_tool(name, args):
             return {"ok": True, "action": "load", "loaded": args["model_key"]}
         unloaded = cluster_ctl.cmd_unload(cfg, node_override=args.get("node"), model_key=args.get("model_key"), quiet=True)
         return {"ok": True, "action": "unload", "unloaded": unloaded}
+    if name == "cluster_models":
+        return _call_cluster_models(cfg)
+    if name == "cluster_chat":
+        return _call_cluster_chat(cfg, args)
     raise ValueError(f"Unknown tool {name!r}")
 
 

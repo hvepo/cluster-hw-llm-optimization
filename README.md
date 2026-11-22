@@ -51,9 +51,9 @@ Full methodology and per-model tables in [docs/BENCHMARKS.md](docs/BENCHMARKS.md
 | Component | Path | Purpose |
 |---|---|---|
 | **Skills (3)** | `skills/{hw-node-profiler,llm-node-finetune,cluster-install-migrate}` | Phase 1 hardware/BIOS/driver profiling, Phase 2 per-node LLM fine-tuning, and cross-OS migration |
-| **5-Protocol Cluster Gateway** | `tools/gateway/{cluster_gateway.py,gateway_ctl.py,cluster_chat.py}` | Exposes unified LM Link pool (`127.0.0.1:1235`) across LM Studio `/api/v1/*`, OpenAI `/v1/*`, Responses, and Anthropic `/v1/messages` with `cluster/*` failover & anti-thrash routing |
-| **Client Provisioner** | `scripts/setup_clients.py` (`--serving`) | Configures OpenCode, VS Code Copilot BYOK, Continue, LM Studio `mcp.json`, and Windows/WSL shell helpers |
-| **Stdio MCP Server (7 tools, 3 resources)** | `mcp/cluster_mcp_server.py` (`cluster-hw-llm`) | `hw_node_profile` · `hw_gpu_telemetry` · `hw_event_log_check` · `llm_compute_ceiling` · `node_llm_status` · `node_best_configs` · `node_llm_control` |
+| **5-Protocol Cluster Gateway & SDK Helper** | `tools/gateway/{cluster_gateway.py,gateway_ctl.py,cluster_chat.py,agy_local_agent.py}` | Exposes unified LM Link pool (`127.0.0.1:1235`) across LM Studio `/api/v1/*`, OpenAI `/v1/*`, Responses, and Anthropic `/v1/messages` with `cluster/*` failover, anti-thrash routing, and Antigravity SDK runner |
+| **Client Provisioner & Ollama Audit** | `scripts/{setup_clients.py,cleanup_ollama.py}` (`--serving`) | Configures OpenCode, VS Code Copilot BYOK, Continue, LM Studio `mcp.json`, Windows/WSL shell helpers (`cluster-agy`), and detects/removes leftover Windows/WSL `:11434` Ollama daemons |
+| **Stdio MCP Server (9 tools, 3 resources)** | `mcp/cluster_mcp_server.py` (`cluster-hw-llm`) | `hw_node_profile` · `hw_gpu_telemetry` · `hw_event_log_check` · `llm_compute_ceiling` · `node_llm_status` · `node_best_configs` · `node_llm_control` · `cluster_models` · `cluster_chat` |
 | **Antigravity Plugin & Hooks** | `plugins/cluster-hw-llm-optimization/` | `PreToolUse` default-config & LM Link safety guard + `SessionStart` node context |
 | **Universal Rules** | `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md` | Cross-agent hardware & LLM benchmarking guardrails |
 

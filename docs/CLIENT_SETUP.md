@@ -98,5 +98,42 @@ Load helpers once in your shell (`source ~/.config/cluster-llm/env.sh`) or Power
 - **Claude Code (`/v1/messages`):** `cluster-claude`
 - **Codex CLI (`/v1/responses`):** `python3 scripts/setup_clients.py --clients codex` then `cluster-codex`
 - **Aider:** `cluster-aider`
+- **Antigravity SDK local agent:** `cluster-agy "Inspect src/ and summarize"` (requires `pip install google-antigravity`)
 - **Python / Node OpenAI SDK:** run `use-cluster-openai`, then `OpenAI(base_url="http://127.0.0.1:1235/v1", api_key="local-cluster")`
 - **Python Anthropic SDK:** `Anthropic(base_url="http://127.0.0.1:1235", api_key="local-cluster")`
+
+---
+
+### 7. Antigravity (App · IDE · CLI · Python SDK)
+
+Antigravity's native UI model dropdown only lists Google-managed cloud models (Gemini 4 / Gemini 3.x / Claude / Orchestrator, or direct Gemini API via `modelProvider: "gemini"` + `GEMINI_API_KEY`); it does not support custom local OpenAI-compatible BYOK endpoints inside the UI selector.
+
+To use your local `torre` + `portatil` `cluster/*` pool with Antigravity on either machine:
+
+1. **Inside Antigravity App / IDE / CLI via MCP (`cluster-hw-llm`):**
+   - `cluster_models`: Queries `http://127.0.0.1:1235/cluster/status` to inspect online nodes, loaded VRAM models, and every `cluster/*` alias route.
+   - `cluster_chat`: Delegates coding, fast drafts (`cluster/fast-agent`), vision (`cluster/vision-heavy`), reasoning (`cluster/reasoning`), or math prompts directly to `http://127.0.0.1:1235/api/v1/chat`, with stateful `previous_response_id` chaining pinned to whichever node holds the session.
+   - Works seamlessly whether you are on **`torre`** or on **`portatil`** (at home over LM Link using both GPUs, or away from home automatically failing over to `portatil` local models).
+2. **Full Local Agent via the Official Antigravity Python SDK (`google-antigravity`):**
+   - Antigravity's Python SDK natively supports external OpenAI-compatible servers via `LocalOpenAIAgentConfig`.
+   - Use [tools/gateway/agy_local_agent.py](../tools/gateway/agy_local_agent.py) (or the `cluster-agy` helper from `env.sh`/`env.ps1`):
+     ```bash
+     pip install google-antigravity
+     python3 tools/gateway/agy_local_agent.py --model cluster/code --workspace . "Review this repo for bugs"
+     ```
+
+---
+
+## Cleaning Up Leftover Ollama Ghosts (PC & Laptop)
+
+If `ollama/*` models (`gemma4:12b`, etc.) still appear in OpenCode or VS Code after uninstalling the Windows Ollama app, it is almost always a **second systemd Ollama service still running inside Ubuntu WSL** on `:11434` (which `.wslconfig` `networkingMode=mirrored` exposes directly to Windows `127.0.0.1:11434`), or a stale Windows User `PATH` entry.
+
+Run the cross-OS audit and cleaner from either **WSL** or **Windows PowerShell** on both `torre` and `portatil`:
+
+```bash
+# Read-only check across Windows + WSL + port 11434 + IDE configs:
+python3 scripts/cleanup_ollama.py --check
+
+# Remove user leftovers + WSL systemd Ollama (prompts once for sudo password if needed):
+python3 scripts/cleanup_ollama.py --apply
+```

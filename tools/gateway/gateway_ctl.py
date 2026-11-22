@@ -317,6 +317,7 @@ def cmd_check_lmlink(cfg):
         "wsl_mirrored_networking": None,
         "upstream_1234_reachable": False,
         "gateway_reachable": False,
+        "ollama_ghost_detected": False,
         "warnings": [],
     }
 
@@ -367,6 +368,18 @@ def cmd_check_lmlink(cfg):
     except Exception:
         report["upstream_1234_reachable"] = False
     report["gateway_reachable"] = _is_healthy(gw_url)
+
+    try:
+        ol = _http_json("http://127.0.0.1:11434/api/tags", timeout=1.5)
+        ol_models = [m.get("name") or m.get("model") for m in (ol.get("models") or []) if m.get("name") or m.get("model")]
+        report["ollama_ghost_detected"] = True
+        report["ollama_ghost_models"] = ol_models
+        report["warnings"].append(
+            "Ollama is still listening on 127.0.0.1:11434 (auto-discovered by OpenCode/VS Code); "
+            "run 'python3 scripts/cleanup_ollama.py --apply' to remove it."
+        )
+    except Exception:
+        pass
 
     print(json.dumps(report, indent=2))
     return 0

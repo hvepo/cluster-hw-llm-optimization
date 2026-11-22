@@ -4,7 +4,7 @@
 - Validates PowerShell AST on all .ps1 files (when powershell.exe/pwsh is available)
 - Validates all JSON configs and Antigravity plugin schema rules (3 focused skills, 0 router leftovers)
 - Regression-tests fixed linear multi-stream scaling in tools/llm/ceiling.py
-- Executes end-to-end stdio JSON-RPC handshake + tool calls on mcp/cluster_mcp_server.py (7 pure HW/LLM tools)
+- Executes end-to-end stdio JSON-RPC handshake + tool calls on mcp/cluster_mcp_server.py (9 HW/LLM/Cluster tools)
 - Executes contract tests on hooks/pre_tool_guard.py & hooks/session_start.py
 - --check-privacy: scans non-ignored/tracked files for personal users, hostnames, Tailscale CGNAT IPs, or secrets
 - --live: runs live hw_node_profile, hw_gpu_telemetry, hw_event_log_check, and node_llm_status via MCP
@@ -29,6 +29,8 @@ EXPECTED_MCP_TOOLS = {
     "node_llm_status",
     "node_best_configs",
     "node_llm_control",
+    "cluster_models",
+    "cluster_chat",
 }
 
 
@@ -173,7 +175,13 @@ def mcp_roundtrip(framing="ndjson", live=False):
         assert "decode" in ceil_txt and "prefill" in ceil_txt
         if live:
             for idx, (tname, targs) in enumerate(
-                [("hw_node_profile", {"days": 1}), ("hw_gpu_telemetry", {}), ("hw_event_log_check", {"hours": 1}), ("node_llm_status", {})],
+                [
+                    ("hw_node_profile", {"days": 1}),
+                    ("hw_gpu_telemetry", {}),
+                    ("hw_event_log_check", {"hours": 1}),
+                    ("node_llm_status", {}),
+                    ("cluster_models", {}),
+                ],
                 start=10,
             ):
                 write_msg({"jsonrpc": "2.0", "id": idx, "method": "tools/call", "params": {"name": tname, "arguments": targs}})
@@ -184,7 +192,7 @@ def mcp_roundtrip(framing="ndjson", live=False):
         proc.wait(timeout=5)
         stderr_out = proc.stderr.read().decode("utf-8", "replace").strip()
         assert proc.returncode == 0, f"MCP server exited {proc.returncode}: {stderr_out}"
-    print(f"[PASS] MCP server ({framing}, live={live}) passed initialize + 7 pure HW/LLM tools")
+    print(f"[PASS] MCP server ({framing}, live={live}) passed initialize + {len(EXPECTED_MCP_TOOLS)} tools")
 
 
 def check_hooks():
@@ -580,6 +588,49 @@ def check_gateway_and_clients():
         assert ld_ok["load_config"]["flash_attention"] is True
         _, _, un_ok = req_json("POST", "/api/v1/models/unload", {"instance_id": "cluster/fast-agent"})
         assert un_ok["instance_id"] == "t-fast-agent"
+
+        # 4b. MCP cluster_models & cluster_chat end-to-end against mocked Cluster Gateway
+        mcp_srv = os.path.join(REPO_ROOT, "mcp", "cluster_mcp_server.py")
+        mcp_env = dict(os.environ)
+        mcp_env["CLUSTER_GATEWAY_URL"] = gw_base
+        m_proc = subprocess.Popen(
+            [sys.executable, mcp_srv],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=mcp_env,
+        )
+        try:
+            def m_send(obj):
+                m_proc.stdin.write((json.dumps(obj) + "\n").encode("utf-8"))
+                m_proc.stdin.flush()
+
+            def m_recv():
+                return json.loads(m_proc.stdout.readline().decode("utf-8"))
+
+            m_send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05"}})
+            assert m_recv()["result"]["serverInfo"]["name"] == "cluster-hw-llm"
+            m_send({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+            m_send({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "cluster_models", "arguments": {}}})
+            cm_res = json.loads(m_recv()["result"]["content"][0]["text"])
+            assert cm_res["ok"] is True
+            assert cm_res["aliases"]["cluster/code"]["resolved"] == "p-code-moe"
+            m_send({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "cluster_chat", "arguments": {"prompt": "hi", "model": "cluster/code"}},
+            })
+            cc_res = json.loads(m_recv()["result"]["content"][0]["text"])
+            assert cc_res["ok"] is True
+            assert cc_res["resolved_model"] == "p-code-moe"
+            assert cc_res["resolved_node"] == "portatil"
+            assert cc_res["text"] == "ok"
+            assert str(cc_res["response_id"]).startswith("resp_lms_")
+        finally:
+            m_proc.stdin.close()
+            m_proc.wait(timeout=5)
+            assert m_proc.returncode == 0, f"MCP gateway test failed: {m_proc.stderr.read().decode('utf-8', 'replace')}"
     finally:
         gw_srv.shutdown()
         gw_srv.server_close()
@@ -651,7 +702,22 @@ def check_gateway_and_clients():
         lms_mcp2 = json.load(open(os.path.join(win_home, ".lmstudio", "mcp.json"), encoding="utf-8"))
         assert list(lms_mcp2["mcpServers"].keys()) == ["browse"]
 
-    print("[PASS] 5-protocol Cluster Gateway (failover, anti-thrash, SSE, /api/v1/chat pin) + client provisioner verified")
+    # 6. CLI smoke checks for Ollama cleaner (--check --json) and Antigravity SDK launcher (--help)
+    cln = subprocess.run(
+        [sys.executable, os.path.join(REPO_ROOT, "scripts", "cleanup_ollama.py"), "--check", "--json"],
+        stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=25,
+    )
+    assert cln.returncode == 0, f"cleanup_ollama --check --json failed: {cln.stderr}"
+    cln_data = json.loads(cln.stdout)
+    assert "api_11434_live" in cln_data and "wsl_root_cleanup_pending" in cln_data
+
+    agy_h = subprocess.run(
+        [sys.executable, os.path.join(REPO_ROOT, "tools", "gateway", "agy_local_agent.py"), "--help"],
+        stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=10,
+    )
+    assert agy_h.returncode == 0, f"agy_local_agent --help failed: {agy_h.stderr}"
+
+    print("[PASS] 5-protocol Cluster Gateway (failover, anti-thrash, SSE, /api/v1/chat pin) + MCP + client provisioner verified")
 
 
 def check_privacy(files):

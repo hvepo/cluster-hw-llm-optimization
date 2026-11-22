@@ -271,12 +271,23 @@ def resolve_win_python(cfg=None):
         if win_home:
             for rel in (
                 "AppData/Local/Python/bin/python.exe",
+                "AppData/Local/Programs/Python/Python315/python.exe",
+                "AppData/Local/Programs/Python/Python314/python.exe",
                 "AppData/Local/Programs/Python/Python313/python.exe",
                 "AppData/Local/Programs/Python/Python312/python.exe",
+                "AppData/Local/Programs/Python/Python311/python.exe",
             ):
                 cand = os.path.join(win_home, rel)
                 if os.path.isfile(cand):
                     return cand
+        for sys_cand in (
+            "/mnt/c/Python315/python.exe",
+            "/mnt/c/Python314/python.exe",
+            "/mnt/c/Python313/python.exe",
+            "/mnt/c/Python312/python.exe",
+        ):
+            if os.path.isfile(sys_cand):
+                return sys_cand
     return "python.exe"
 
 

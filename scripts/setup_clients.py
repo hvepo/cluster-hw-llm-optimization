@@ -324,6 +324,7 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         win_cmd = ctx["mcp_command"]
         pre_args = " ".join(f'"{a}"' for a in ctx["mcp_args"][:-1])
         chat_script = win_root.rstrip("\\") + r"\tools\gateway\cluster_chat.py"
+        agy_script = win_root.rstrip("\\") + r"\tools\gateway\agy_local_agent.py"
         ctl_script = win_root.rstrip("\\") + r"\tools\cluster_ctl.py"
         gw_ctl_script = win_root.rstrip("\\") + r"\tools\gateway\gateway_ctl.py"
         ps_body = (
@@ -338,6 +339,7 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             "}\n"
             "function cluster-status { & " + f'"{win_cmd}" {pre_args} "{gw_ctl_script}" status @args' + " }\n"
             "function cluster-chat { & " + f'"{win_cmd}" {pre_args} "{chat_script}" @args' + " }\n"
+            "function cluster-agy { & " + f'"{win_cmd}" {pre_args} "{agy_script}" @args' + " }\n"
             "function cluster-preset { param([string]$Name='home-dual') & " + f'"{win_cmd}" {pre_args} "{ctl_script}" preset $Name' + " }\n"
             "function cluster-claude {\n"
             "  param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest)\n"
@@ -376,6 +378,7 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         "}\n"
         f'cluster-status() {{ "{py}" "{posix_repo}/tools/gateway/gateway_ctl.py" status "$@"; }}\n'
         f'cluster-chat() {{ "{py}" "{posix_repo}/tools/gateway/cluster_chat.py" "$@"; }}\n'
+        f'cluster-agy() {{ "{py}" "{posix_repo}/tools/gateway/agy_local_agent.py" "$@"; }}\n'
         f'cluster-preset() {{ "{py}" "{posix_repo}/tools/cluster_ctl.py" preset "${{1:-home-dual}}"; }}\n'
         "cluster-claude() {\n"
         f'  ANTHROPIC_BASE_URL="{base}" ANTHROPIC_AUTH_TOKEN="local-cluster" \\\n'

@@ -204,14 +204,25 @@ def detect_windows_context(current_plat, force_wsl_python=False):
             if exe and "WindowsApps" not in exe and os.path.isfile(exe):
                 win_py_winstr = exe
         elif current_plat == "wsl" and win_userprofile_local and win_userprofile_winstr:
+            candidates = []
             for rel_posix, rel_win in (
                 ("AppData/Local/Python/bin/python.exe", r"AppData\Local\Python\bin\python.exe"),
+                ("AppData/Local/Programs/Python/Python315/python.exe", r"AppData\Local\Programs\Python\Python315\python.exe"),
+                ("AppData/Local/Programs/Python/Python314/python.exe", r"AppData\Local\Programs\Python\Python314\python.exe"),
                 ("AppData/Local/Programs/Python/Python313/python.exe", r"AppData\Local\Programs\Python\Python313\python.exe"),
                 ("AppData/Local/Programs/Python/Python312/python.exe", r"AppData\Local\Programs\Python\Python312\python.exe"),
                 ("AppData/Local/Programs/Python/Python311/python.exe", r"AppData\Local\Programs\Python\Python311\python.exe"),
             ):
-                if os.path.isfile(os.path.join(win_userprofile_local, rel_posix)):
-                    win_py_winstr = win_userprofile_winstr.rstrip("\\") + "\\" + rel_win
+                candidates.append((os.path.join(win_userprofile_local, rel_posix), win_userprofile_winstr.rstrip("\\") + "\\" + rel_win))
+            candidates.extend([
+                ("/mnt/c/Python315/python.exe", r"C:\Python315\python.exe"),
+                ("/mnt/c/Python314/python.exe", r"C:\Python314\python.exe"),
+                ("/mnt/c/Python313/python.exe", r"C:\Python313\python.exe"),
+                ("/mnt/c/Python312/python.exe", r"C:\Python312\python.exe"),
+            ])
+            for posix_cand, win_cand in candidates:
+                if os.path.isfile(posix_cand):
+                    win_py_winstr = win_cand
                     break
 
     if win_py_winstr:
