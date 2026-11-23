@@ -148,6 +148,29 @@ def find_openclaw_bin():
     return None
 
 
+def find_agy_bin():
+    cands = [
+        os.path.join(os.path.expanduser("~"), ".gemini", "bin", "agy"),
+        shutil.which("agy") or "",
+    ]
+    for c in cands:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def get_responder_mode(cfg=None):
+    oc_cfg = ((cfg or {}).get("peer") or {}).get("openclaw") or {}
+    mode = str(oc_cfg.get("responder") or "antigravity").strip().lower()
+    return mode if mode in ("antigravity", "openclaw") else "antigravity"
+
+
+def can_start_responder(cfg=None):
+    if get_responder_mode(cfg) == "antigravity":
+        return bool(find_agy_bin())
+    return bool(find_openclaw_bin())
+
+
 def _node_env(node_bin=None):
     env = os.environ.copy()
     parts = [
@@ -592,7 +615,7 @@ def sweep_orphan_openclaw(keep_pid=None):
             cmd = " ".join(p.decode("utf-8", "ignore") for p in raw.split(b"\x00") if p).lower()
             if "openclaw_ctl.py" in cmd or "openclaw-sentinel" in cmd:
                 continue
-            if "openclaw-gateway" in cmd or ("openclaw" in cmd and "gateway" in cmd):
+            if "openclaw-gateway" in cmd or ("openclaw" in cmd and "gateway" in cmd) or "telegram_agy_daemon.py" in cmd:
                 os.kill(pid, signal.SIGTERM)
                 killed.append(pid)
         except Exception:
@@ -634,9 +657,15 @@ def _call_sibling_openclaw_fence(cfg, timeout=3.0):
 
 
 def cmd_start(cfg, force=False, manual_leader=None):
-    oc_bin = find_openclaw_bin()
-    if not oc_bin:
-        return {"ok": False, "error": "openclaw binary not found in WSL. Run: python3 tools/peer/openclaw_ctl.py install-runtime"}
+    responder = get_responder_mode(cfg)
+    if responder == "antigravity":
+        agy_bin = find_agy_bin()
+        if not agy_bin:
+            return {"ok": False, "error": "agy binary not found in WSL (~/.gemini/bin/agy)"}
+    else:
+        oc_bin = find_openclaw_bin()
+        if not oc_bin:
+            return {"ok": False, "error": "openclaw binary not found in WSL. Run: python3 tools/peer/openclaw_ctl.py install-runtime"}
 
     local_node = cfg.get("local_node", "torre")
     oc_cfg = ((cfg.get("peer") or {}).get("openclaw") or {})
@@ -647,7 +676,7 @@ def cmd_start(cfg, force=False, manual_leader=None):
     cur_pid = _read_pid(_oc_pid_file())
     if cur_pid:
         store.acquire_or_renew(local_node, pid=cur_pid, ttl_s=ttl_s, force=force, manual_leader=manual_leader)
-        return {"ok": True, "already_running": True, "pid": cur_pid, "node": local_node, "port": port}
+        return {"ok": True, "already_running": True, "pid": cur_pid, "node": local_node, "responder": responder, "port": port}
 
     ok, lease = store.acquire_or_renew(local_node, pid=None, ttl_s=ttl_s, force=force, manual_leader=manual_leader)
     if not ok:
@@ -656,9 +685,14 @@ def cmd_start(cfg, force=False, manual_leader=None):
     _ensure_secure_openclaw_dir(openclaw_home(), private=True)
     sweep_orphan_openclaw()
     log_path = _oc_log_file()
+    if responder == "antigravity":
+        launch_cmd = [sys.executable, os.path.join(PEER_DIR, "telegram_agy_daemon.py"), "--repo-root", REPO_ROOT]
+    else:
+        launch_cmd = [oc_bin, "gateway", "run"]
+
     with open(log_path, "a", encoding="utf-8") as log_f:
         proc = subprocess.Popen(
-            [oc_bin, "gateway", "run"],
+            launch_cmd,
             stdin=subprocess.DEVNULL,
             stdout=log_f,
             stderr=log_f,
@@ -669,6 +703,14 @@ def cmd_start(cfg, force=False, manual_leader=None):
         f.write(str(proc.pid))
 
     store.acquire_or_renew(local_node, pid=proc.pid, ttl_s=ttl_s, force=True, manual_leader=manual_leader)
+    if responder == "antigravity":
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                return {"ok": False, "error": f"telegram_agy_daemon exited early ({proc.returncode}); check {log_path}"}
+            time.sleep(0.2)
+        return {"ok": True, "pid": proc.pid, "node": local_node, "responder": responder, "log": log_path}
+
     deadline = time.time() + 20.0
     while time.time() < deadline:
         if proc.poll() is not None:
@@ -677,7 +719,7 @@ def cmd_start(cfg, force=False, manual_leader=None):
             break
         time.sleep(0.3)
 
-    return {"ok": True, "pid": proc.pid, "node": local_node, "port": port, "port_open": _port_open("127.0.0.1", port)}
+    return {"ok": True, "pid": proc.pid, "node": local_node, "responder": responder, "port": port, "port_open": _port_open("127.0.0.1", port)}
 
 
 def cmd_stop(cfg, release_lease=True):
@@ -735,6 +777,8 @@ def cmd_status(cfg):
     return {
         "local_node": local_node,
         "platform": cluster_lib.detect_platform(),
+        "responder": get_responder_mode(cfg),
+        "agy_bin": find_agy_bin(),
         "node_bin": find_linux_node_bin(),
         "openclaw_bin": find_openclaw_bin(),
         "config_path": cpath,

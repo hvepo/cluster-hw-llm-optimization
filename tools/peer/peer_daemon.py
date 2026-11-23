@@ -170,7 +170,9 @@ class PeerRuntime:
         if target_os == "windows":
             prompt = f"[Target OS: Windows via powershell.exe -NoProfile -Command ... < /dev/null]\n{prompt}"
 
-        cmd = [agy_bin, "-p", prompt, "--output-format", "json", "--mode", mode]
+        cmd = [agy_bin, "-p", prompt, "--output-format", "json"]
+        if mode and mode != "auto":
+            cmd.extend(["--mode", mode])
         if mode == "auto":
             cmd.append("--dangerously-skip-permissions")
         if job.get("conversation_id"):

@@ -16,6 +16,9 @@
     "openclaw": {
       "enabled": true,
       "primary_node": "torre",
+      "responder": "antigravity",
+      "agy_autonomous": true,
+      "agy_cwd": "~",
       "port": 18789,
       "lease_ttl_s": 30,
       "probe_interval_s": 10,

@@ -813,6 +813,7 @@ def check_peer_and_openclaw():
     sys.path.insert(0, os.path.join(REPO_ROOT, "tools", "peer"))
     import openclaw_ctl  # noqa: E402
     import peer_daemon  # noqa: E402
+    import telegram_agy_daemon  # noqa: E402
 
     with tempfile.TemporaryDirectory() as tmp:
         sync_dir = os.path.join(tmp, "sync")
@@ -978,6 +979,50 @@ def check_peer_and_openclaw():
                     os.environ.pop("OPENCLAW_HOME", None)
                 else:
                     os.environ["OPENCLAW_HOME"] = old_oc_home
+
+            # 4d. Antigravity-first Telegram responder unit checks
+            assert telegram_agy_daemon.is_authorized_sender("999", "111", []) is False
+            assert telegram_agy_daemon.is_authorized_sender("999", "111", ["123"]) is False
+            assert telegram_agy_daemon.is_authorized_sender("123", "111", ["123"]) is True
+            assert telegram_agy_daemon.is_authorized_sender("999", "123", ["123"]) is True
+
+            long_msg = "\n".join(f"line-{i}: " + ("x" * 80) for i in range(110))
+            chunks = telegram_agy_daemon.chunk_text(long_msg, max_len=3900)
+            assert len(chunks) >= 2 and all(len(c) <= 3900 for c in chunks)
+            assert "line-0:" in chunks[0] and "line-109:" in chunks[-1]
+
+            assert telegram_agy_daemon.route_message("")["action"] == "ignore"
+            assert telegram_agy_daemon.route_message("/help")["action"] == "reply"
+            assert telegram_agy_daemon.route_message("/new")["action"] == "reset"
+            assert telegram_agy_daemon.route_message("/status")["action"] == "status"
+            assert telegram_agy_daemon.route_message("ping") == {"action": "antigravity", "prompt": "ping"}
+            assert telegram_agy_daemon.resolve_default_cwd({}) == os.path.expanduser("~")
+            assert openclaw_ctl.get_responder_mode({}) == "antigravity"
+            assert openclaw_ctl.get_responder_mode({"peer": {"openclaw": {"responder": "openclaw"}}}) == "openclaw"
+
+            if os.name != "nt":
+                mock_agy = os.path.join(tmp, "mock_agy.sh")
+                args_log = os.path.join(tmp, "mock_agy_args.txt")
+                with open(mock_agy, "w", encoding="utf-8") as f:
+                    f.write(
+                        "#!/usr/bin/env bash\n"
+                        "args_flat=\"$*\"\n"
+                        f"printf '%s\\n' \"${{args_flat//$'\\n'/ }}\" >> '{args_log}'\n"
+                        "if [[ \"$*\" == *\"--conversation conv_abc\"* ]]; then\n"
+                        "  echo '{\"conversation_id\":\"conv_abc\",\"status\":\"OK\",\"response\":\"pong-2\"}'\n"
+                        "else\n"
+                        "  echo '{\"conversation_id\":\"conv_abc\",\"status\":\"OK\",\"response\":\"pong-1\"}'\n"
+                        "fi\n"
+                    )
+                os.chmod(mock_agy, 0o755)
+                r1 = telegram_agy_daemon.run_antigravity_turn("ping", agy_bin=mock_agy, autonomous=True)
+                assert r1["ok"] is True and r1["text"] == "pong-1" and r1["conversation_id"] == "conv_abc"
+                r2 = telegram_agy_daemon.run_antigravity_turn("follow up", conversation_id=r1["conversation_id"], agy_bin=mock_agy, autonomous=True)
+                assert r2["ok"] is True and r2["text"] == "pong-2"
+                recorded = open(args_log, encoding="utf-8").read().splitlines()
+                assert len(recorded) == 2
+                assert "--dangerously-skip-permissions" in recorded[0] and "--mode auto" not in recorded[0]
+                assert "--conversation conv_abc" in recorded[1]
 
             # 5. Stdio MCP roundtrip for peer_status & openclaw_control(status)
             mcp_env = dict(os.environ)

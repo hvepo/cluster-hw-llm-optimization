@@ -9,7 +9,8 @@ Send autonomous tasks bidirectionally between **`torre` (PC)** and **`portatil` 
 ```mermaid
 flowchart TD
     Phone["Mobile Phone (Telegram Bot)"]
-    OpenClaw["OpenClaw Gateway in WSL (:18789, Active Leader)"]
+    Bridge["Telegram-Antigravity Responder (WSL, Active Leader)"]
+    Agy["Antigravity CLI (Default Responder, cwd=~, full perms)"]
     TorreAgy["torre Antigravity / IDE (WSL or Windows)"]
     PortatilAgy["portatil Antigravity / IDE (WSL or Windows)"]
     TorrePeer["torre Peer Daemon (:1236 Tailscale + 127.0.0.1)"]
@@ -17,10 +18,11 @@ flowchart TD
     Drive["Google Drive Sync (peer-queue + openclaw-ha/leader.json)"]
     Gateway["Cluster Router Gateway (:1235 -> cluster/* LM Link)"]
 
-    Phone <-->|"Allowlisted Telegram DM"| OpenClaw
-    OpenClaw -->|"cluster/code · cluster/fast-agent"| Gateway
-    OpenClaw -->|"peer_ctl.py send --to torre|portatil"| TorrePeer
-    OpenClaw -->|"peer_ctl.py send --to torre|portatil"| PortatilPeer
+    Phone <-->|"Allowlisted Telegram DM"| Bridge
+    Bridge -->|"Default responder (no local model wakeup)"| Agy
+    Agy -.->|"Optional delegation when needed"| Gateway
+    Agy -.->|"peer_ctl.py send/exec --to torre|portatil"| TorrePeer
+    Agy -.->|"peer_ctl.py send/exec --to torre|portatil"| PortatilPeer
     TorreAgy <-->|"MCP peer_* / openclaw_control"| TorrePeer
     PortatilAgy <-->|"MCP peer_* / openclaw_control"| PortatilPeer
     TorrePeer <-->|"Fast-Path HTTP (:1236 + Bearer Token)"| PortatilPeer
@@ -40,13 +42,14 @@ flowchart TD
    - Because WSL2 uses `networkingMode=mirrored`, Windows and WSL on each machine share `127.0.0.1` and the Tailscale IP.
    - `target_os="wsl"` executes `~/.gemini/bin/agy -p ... --mode auto --dangerously-skip-permissions --output-format json` (or `bash -lc`).
    - `target_os="windows"` runs `powershell.exe -NoProfile -Command ...` with `stdin=subprocess.DEVNULL` (for `exec`) or routes an `agy` task targeting Windows PowerShell.
-3. **OpenClaw in WSL Only + Active-Standby HA:**
-   - OpenClaw runs in **WSL** on both machines (accessible from Windows browsers via `localhost:18789` thanks to mirrored networking), wrapped at `~/.local/bin/openclaw` to pin Node `v24+` regardless of shell `$PATH`, and is pre-configured to use `http://127.0.0.1:1235/v1` (`cluster/code`, `cluster/fast-agent`, `cluster/reasoning`, `cluster/vision-heavy`) while keeping your existing Telegram `botToken` and `allowFrom` allowlist intact.
+3. **Antigravity-First Telegram Bridge in WSL + Active-Standby HA:**
+   - By default (`peer.openclaw.responder = "antigravity"`), the active leader runs `tools/peer/telegram_agy_daemon.py` in **WSL**, polling your Telegram bot for allowlisted DMs and routing messages to Antigravity (`~/.gemini/bin/agy -p ... --dangerously-skip-permissions --output-format json`) with `cwd=~` (project-independent) and persistent per-chat `conversation_id`.
+   - Local LM Studio models (`:1234` / `:1235`) stay idle unless Antigravity explicitly delegates a task to cluster tools/subagents. (You can switch back to the OpenClaw gateway anytime by setting `peer.openclaw.responder = "openclaw"` in gitignored `cluster.local.json`; OpenClaw itself remains wrapped at `~/.local/bin/openclaw` pinned to Node `v24+`.)
    - To copy Telegram/provider/gateway secrets directly from `torre` to `portatil` over authenticated Tailscale `:1236` (keeping them out of Git and Google Drive), run:
      ```bash
      python3 tools/peer/openclaw_ctl.py sync-secrets --to portatil
      ```
-   - Only **one** machine holds `<sync_dir>/openclaw-ha/leader.json` and runs `openclaw gateway run` at any time:
+   - Only **one** machine holds `<sync_dir>/openclaw-ha/leader.json` and polls Telegram `getUpdates` at any time:
      - **`torre`** is primary when online.
      - **`portatil`** promotes itself automatically if `torre` fails 3 consecutive probes and the 30s lease expires.
      - **Manual Takeover:** Either PC or Laptop can run `openclaw_ctl.py takeover` (or MCP `openclaw_control(action="takeover")`) to cleanly fence the sibling over `:1236` and assume Telegram bot leadership immediately.

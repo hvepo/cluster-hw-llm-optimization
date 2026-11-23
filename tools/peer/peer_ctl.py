@@ -85,11 +85,15 @@ def cmd_init_token(cfg, sync_dir_override=""):
     peer_sec.setdefault("openclaw", {
         "enabled": True,
         "primary_node": "torre",
+        "responder": "antigravity",
+        "agy_autonomous": True,
+        "agy_cwd": "~",
         "port": 18789,
         "lease_ttl_s": 30,
         "probe_interval_s": 10,
         "failures_before_failover": 3,
     })
+    peer_sec["openclaw"].setdefault("responder", "antigravity")
 
     sync_dir = sync_dir_override or openclaw_ctl.resolve_sync_dir(raw)
     if sync_dir:
@@ -382,7 +386,7 @@ def cmd_uninstall_autostart(dry_run=False):
 def cmd_autostart_boot(cfg):
     p_res = cmd_start(cfg)
     s_res = {"ok": True, "skipped": True}
-    if openclaw_ctl.find_openclaw_bin():
+    if openclaw_ctl.can_start_responder(cfg):
         s_res = openclaw_ctl.start_sentinel_daemon(cfg)
     return {"ok": True, "peer": p_res, "sentinel": s_res}
 
