@@ -124,10 +124,9 @@ To use your local `torre` + `portatil` `cluster/*` pool with Antigravity on eith
      - WSL / Linux: `bash install.sh --os auto --targets agy --scope user`
      - Windows PowerShell: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Os auto -Targets agy -Scope user`
 2. **Inside Antigravity App / IDE / CLI via MCP (`cluster-hw-llm`):**
-   - `cluster_models`: Queries `http://127.0.0.1:1235/cluster/status` to inspect online nodes, loaded VRAM models, and every `cluster/*` alias route.
-   - `cluster_chat`: Delegates coding, fast drafts (`cluster/fast-agent`), vision (`cluster/vision-heavy`), reasoning (`cluster/reasoning`), or math prompts directly to `http://127.0.0.1:1235/api/v1/chat`, with stateful `previous_response_id` chaining pinned to whichever node holds the session.
-   - Works seamlessly whether you are on **`torre`** or on **`portatil`** (at home over LM Link using both GPUs, or away from home automatically failing over to `portatil` local models).
-2. **Full Local Agent via the Official Antigravity Python SDK (`google-antigravity`):**
+   - `cluster_models` & `cluster_chat`: Inspect live `cluster/*` routes and delegate coding, reasoning, or multimodal prompts to your local pool with stateful `previous_response_id` chaining.
+   - `peer_status`, `peer_send_order`, `peer_order_status`, `peer_exec`, & `openclaw_control`: Send autonomous orders bidirectionally between `torre` and `portatil` across WSL/Windows and control OpenClaw + Telegram HA leadership — see [PEER_AND_OPENCLAW.md](PEER_AND_OPENCLAW.md).
+3. **Full Local Agent via the Official Antigravity Python SDK (`google-antigravity`):**
    - Antigravity's Python SDK natively supports external OpenAI-compatible servers via `LocalOpenAIAgentConfig`.
    - Use [tools/gateway/agy_local_agent.py](../tools/gateway/agy_local_agent.py) (or the `cluster-agy` helper from `env.sh`/`env.ps1`):
      ```bash

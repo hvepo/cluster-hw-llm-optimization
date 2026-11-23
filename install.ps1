@@ -17,6 +17,8 @@ param(
     [switch]$WinUseWslPython,
     [switch]$Serving,
     [string]$Clients = "all",
+    [switch]$Peer,
+    [switch]$OpenClaw,
     [switch]$DryRun,
     [switch]$Uninstall,
     [switch]$Doctor
@@ -60,6 +62,8 @@ if ($TorreUrl) { $pyArgs += @("--torre-url", $TorreUrl) }
 if ($PortatilUrl) { $pyArgs += @("--portatil-url", $PortatilUrl) }
 if ($WinUseWslPython) { $pyArgs += "--win-use-wsl-python" }
 if ($Serving) { $pyArgs += @("--serving", "--clients", $Clients) }
+if ($Peer) { $pyArgs += "--peer" }
+if ($OpenClaw) { $pyArgs += "--openclaw" }
 if ($DryRun) { $pyArgs += "--dry-run" }
 if ($Uninstall) { $pyArgs += "--uninstall" }
 if ($Doctor) { $pyArgs += "--doctor" }

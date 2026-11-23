@@ -8,12 +8,27 @@
     "upstream_url": "http://127.0.0.1:1234",
     "code_profile": "smart-first"
   },
+  "peer": {
+    "port": 1236,
+    "token": "<GENERATED_PEER_TOKEN>",
+    "sync_dir": "<SHARED_SYNC_DIR>",
+    "default_mode": "auto",
+    "openclaw": {
+      "enabled": true,
+      "primary_node": "torre",
+      "port": 18789,
+      "lease_ttl_s": 30,
+      "probe_interval_s": 10,
+      "failures_before_failover": 3
+    }
+  },
   "nodes": {
     "torre": {
       "label": "torre",
       "role": "desktop-cuda-workstation",
       "os": "windows+wsl",
       "base_url": "http://127.0.0.1:1234",
+      "peer_url": "http://<TORRE_TAILSCALE_IP>:1236",
       "model_prefixes": ["t-", "text-embedding-t-"],
       "hardware": {
         "cpu": "AMD Ryzen 9 5950X (16C/32T)",
@@ -51,6 +66,7 @@
       "role": "laptop-unified-igpu",
       "os": "windows+wsl",
       "base_url": "http://<PORTATIL_TAILSCALE_IP>:1234",
+      "peer_url": "http://<PORTATIL_TAILSCALE_IP>:1236",
       "model_prefixes": ["p-", "text-embedding-p-"],
       "hardware": {
         "cpu": "Intel Core Ultra 7 258V",

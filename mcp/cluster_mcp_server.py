@@ -18,12 +18,14 @@ TOOLS_DIR = os.path.join(REPO_ROOT, "tools")
 sys.path.insert(0, TOOLS_DIR)
 sys.path.insert(0, os.path.join(TOOLS_DIR, "llm"))
 sys.path.insert(0, os.path.join(TOOLS_DIR, "hw"))
+sys.path.insert(0, os.path.join(TOOLS_DIR, "peer"))
 
 import ceiling  # noqa: E402
 import cluster_ctl  # noqa: E402
 import cluster_lib  # noqa: E402
 import gpu_oc_verify  # noqa: E402
 import hardware_probe  # noqa: E402
+import peer_ctl  # noqa: E402
 
 SERVER_INFO = {"name": "cluster-hw-llm", "version": "1.2.0"}
 
@@ -130,6 +132,82 @@ TOOLS = [
                 "timeout_s": {"type": "integer", "minimum": 10, "maximum": 600, "default": 180},
             },
             "required": ["prompt"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "peer_status",
+        "description": "Check live reachability of the local and sibling Peer Order Daemons (:1236), agy CLI availability, offline Drive queue counts, and OpenClaw HA leader status.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"node": {"type": "string", "description": "Optional node filter (e.g. 'torre' or 'portatil')."}},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "peer_send_order",
+        "description": "Send an Antigravity order (agy -p) bidirectionally to torre or portatil across WSL, Windows, or auto via Tailscale :1236 (with automatic Google Drive offline queue fallback).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "node": {"type": "string", "description": "Target cluster node ('torre' or 'portatil')."},
+                "prompt": {"type": "string", "description": "Task or order prompt to execute on the target machine."},
+                "target_os": {"type": "string", "enum": ["auto", "wsl", "windows"], "default": "auto"},
+                "mode": {"type": "string", "enum": ["auto", "accept-edits", "plan"], "default": "auto"},
+                "agent": {"type": "string", "description": "Optional Antigravity agent name."},
+                "model": {"type": "string", "description": "Optional model override."},
+                "conversation_id": {"type": "string", "description": "Optional conversation ID to resume a multi-turn thread."},
+                "cwd": {"type": "string", "description": "Optional working directory on the target node."},
+                "wait_s": {"type": "number", "minimum": 0, "maximum": 600, "default": 0},
+                "queue_if_offline": {"type": "boolean", "default": True},
+                "reply_telegram": {"type": "boolean", "default": False},
+            },
+            "required": ["node", "prompt"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "peer_order_status",
+        "description": "Fetch status, output text, and conversation_id for a peer_send_order or peer_exec job_id (online HTTP or Google Drive completed queue).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string"},
+                "node": {"type": "string", "description": "Target node where the job ran ('torre' or 'portatil')."},
+            },
+            "required": ["job_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "peer_exec",
+        "description": "Run a shell (WSL/Linux bash) or PowerShell (Windows) command on torre or portatil via Tailscale :1236 (with offline queue fallback).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "node": {"type": "string", "description": "Target node ('torre' or 'portatil')."},
+                "command": {"type": "string", "description": "Shell or PowerShell command to execute."},
+                "target_os": {"type": "string", "enum": ["auto", "wsl", "windows"], "default": "auto"},
+                "cwd": {"type": "string"},
+                "wait_s": {"type": "number", "minimum": 0, "maximum": 300, "default": 30},
+                "timeout_s": {"type": "integer", "minimum": 5, "maximum": 600, "default": 120},
+                "queue_if_offline": {"type": "boolean", "default": True},
+            },
+            "required": ["node", "command"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "openclaw_control",
+        "description": "Inspect, start, stop, cleanly transfer Active-Standby leadership (takeover without Telegram 409 Conflict), or send a Telegram reply via OpenClaw.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["status", "start", "stop", "takeover", "telegram_reply"]},
+                "node": {"type": "string", "description": "Optional node to run the action on (defaults to local_node)."},
+                "message": {"type": "string", "description": "Message text when action='telegram_reply'."},
+            },
+            "required": ["action"],
             "additionalProperties": False,
         },
     },
@@ -327,6 +405,43 @@ def handle_tool(name, args):
         return _call_cluster_models(cfg)
     if name == "cluster_chat":
         return _call_cluster_chat(cfg, args)
+    if name == "peer_status":
+        return peer_ctl.collect_status(cfg, node_filter=args.get("node"))
+    if name == "peer_send_order":
+        return peer_ctl.send_order(
+            cfg,
+            target_node=args["node"],
+            prompt=args["prompt"],
+            target_os=args.get("target_os") or "auto",
+            mode=args.get("mode") or "auto",
+            agent=args.get("agent"),
+            model=args.get("model"),
+            conversation_id=args.get("conversation_id"),
+            cwd=args.get("cwd"),
+            wait_s=args.get("wait_s", 0.0),
+            queue_if_offline=args.get("queue_if_offline", True),
+            reply_telegram=args.get("reply_telegram", False),
+        )
+    if name == "peer_order_status":
+        return peer_ctl.get_job_status(cfg, args["job_id"], target_node=args.get("node"))
+    if name == "peer_exec":
+        return peer_ctl.exec_command(
+            cfg,
+            target_node=args["node"],
+            command=args["command"],
+            target_os=args.get("target_os") or "auto",
+            cwd=args.get("cwd"),
+            wait_s=args.get("wait_s", 30.0),
+            timeout_s=args.get("timeout_s", 120),
+            queue_if_offline=args.get("queue_if_offline", True),
+        )
+    if name == "openclaw_control":
+        return peer_ctl.remote_openclaw_control(
+            cfg,
+            action=args["action"],
+            target_node=args.get("node"),
+            message=args.get("message"),
+        )
     raise ValueError(f"Unknown tool {name!r}")
 
 

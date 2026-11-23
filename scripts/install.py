@@ -613,6 +613,8 @@ def main(argv=None):
     ap.add_argument("--win-use-wsl-python", action="store_true", help="Configure Windows targets to bridge via wsl.exe -e python3")
     ap.add_argument("--serving", "--with-gateway", dest="serving", action="store_true", help="Configure Cluster Router Gateway (:1235), autostart, and IDE/CLI clients")
     ap.add_argument("--clients", default="all", help="Clients for --serving (default: all -> opencode,vscode,continue,lmstudio,env)")
+    ap.add_argument("--peer", action="store_true", help="Configure Bidirectional Peer Order Daemon (:1236) + autostart")
+    ap.add_argument("--openclaw", action="store_true", help="Install/configure WSL OpenClaw + Active-Standby HA sentinel")
     ap.add_argument("--dry-run", action="store_true", help="Print actions without modifying files")
     ap.add_argument("--uninstall", action="store_true", help="Remove installed global plugin/MCP/skills entries")
     ap.add_argument("--doctor", action="store_true", help="Run scripts/doctor.py after installation")
@@ -707,6 +709,46 @@ def main(argv=None):
                 subprocess.run([sys.executable, gw_ctl, "install-autostart"], stdin=subprocess.DEVNULL, check=True)
                 subprocess.run([sys.executable, gw_ctl, "restart"], stdin=subprocess.DEVNULL, check=True)
                 subprocess.run([sys.executable, gw_ctl, "check-lmlink"], stdin=subprocess.DEVNULL)
+
+    if args.peer or args.openclaw:
+        posix_repo = cluster_lib.normalize_local_path(REPO_ROOT, "wsl")
+        if current_plat == "windows" and wsl_from_win:
+            wsl_bin = cluster_lib.resolve_host_binary("wsl.exe")
+            def _run_wsl_py(rel_script, *sargs):
+                return subprocess.run(
+                    [wsl_bin, "-e", "python3", f"{posix_repo}/{rel_script}", *sargs],
+                    stdin=subprocess.DEVNULL,
+                    check=True,
+                )
+        else:
+            def _run_wsl_py(rel_script, *sargs):
+                return subprocess.run(
+                    [sys.executable, os.path.join(REPO_ROOT, rel_script), *sargs],
+                    stdin=subprocess.DEVNULL,
+                    check=True,
+                )
+
+        if args.peer:
+            if args.uninstall:
+                if not args.dry_run:
+                    _run_wsl_py("tools/peer/peer_ctl.py", "stop")
+                    _run_wsl_py("tools/peer/peer_ctl.py", "uninstall-autostart")
+            elif not args.dry_run:
+                _run_wsl_py("tools/peer/peer_ctl.py", "init-token")
+                _run_wsl_py("tools/peer/peer_ctl.py", "install-autostart")
+                _run_wsl_py("tools/peer/peer_ctl.py", "restart")
+            else:
+                _run_wsl_py("tools/peer/peer_ctl.py", "install-autostart", "--dry-run")
+
+        if args.openclaw:
+            if args.uninstall:
+                if not args.dry_run:
+                    _run_wsl_py("tools/peer/openclaw_ctl.py", "sentinel-stop")
+                    _run_wsl_py("tools/peer/openclaw_ctl.py", "stop")
+            elif not args.dry_run:
+                _run_wsl_py("tools/peer/openclaw_ctl.py", "install-runtime")
+                _run_wsl_py("tools/peer/openclaw_ctl.py", "configure")
+                _run_wsl_py("tools/peer/openclaw_ctl.py", "sentinel", "--daemon")
 
     if args.doctor and not args.dry_run and not args.uninstall:
         doctor_script = os.path.join(REPO_ROOT, "scripts", "doctor.py")

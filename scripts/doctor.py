@@ -33,6 +33,11 @@ EXPECTED_MCP_TOOLS = {
     "node_llm_control",
     "cluster_models",
     "cluster_chat",
+    "peer_status",
+    "peer_send_order",
+    "peer_order_status",
+    "peer_exec",
+    "openclaw_control",
 }
 
 
@@ -800,6 +805,134 @@ def check_gateway_and_clients():
     print("[PASS] 5-protocol Cluster Gateway (failover, anti-thrash, SSE, /api/v1/chat pin) + MCP + client provisioner verified")
 
 
+def check_peer_and_openclaw():
+    import time
+    import urllib.error
+    import urllib.request
+
+    sys.path.insert(0, os.path.join(REPO_ROOT, "tools", "peer"))
+    import openclaw_ctl  # noqa: E402
+    import peer_daemon  # noqa: E402
+
+    with tempfile.TemporaryDirectory() as tmp:
+        sync_dir = os.path.join(tmp, "sync")
+        os.makedirs(sync_dir, exist_ok=True)
+        tok = "test-peer-token-1234567890abcdef"
+        rt = peer_daemon.PeerRuntime(repo_root=REPO_ROOT, token=tok, sync_dir=sync_dir)
+        srvs = peer_daemon.start_servers(rt, ["127.0.0.1"], port=0)
+        port = srvs[0].server_address[1]
+        base = f"http://127.0.0.1:{port}"
+        try:
+            # 1. /health works unauthenticated; /status requires valid Bearer token
+            with urllib.request.urlopen(base + "/health", timeout=3) as r:
+                hl = json.loads(r.read().decode("utf-8"))
+                assert hl["ok"] is True
+            for hdrs in ({}, {"Authorization": "Bearer wrong"}):
+                try:
+                    urllib.request.urlopen(urllib.request.Request(base + "/status", headers=hdrs), timeout=3)
+                    raise AssertionError("Expected 401 on unauthorized /status")
+                except urllib.error.HTTPError as e:
+                    assert e.code == 401
+            with urllib.request.urlopen(urllib.request.Request(base + "/status", headers={"Authorization": f"Bearer {tok}"}), timeout=3) as r:
+                st = json.loads(r.read().decode("utf-8"))
+                assert st["ok"] is True
+
+            # 2. POST /exec + GET /jobs/<id>
+            req = urllib.request.Request(
+                base + "/exec",
+                data=json.dumps({"command": "echo peer-ok", "target_os": "wsl", "wait_s": 10}).encode("utf-8"),
+                headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as r:
+                ex = json.loads(r.read().decode("utf-8"))
+                assert ex["ok"] is True and ex["status"] == "completed" and "peer-ok" in ex["stdout"]
+            with urllib.request.urlopen(urllib.request.Request(base + f"/jobs/{ex['job_id']}", headers={"Authorization": f"Bearer {tok}"}), timeout=3) as r:
+                jb = json.loads(r.read().decode("utf-8"))
+                assert jb["job"]["job_id"] == ex["job_id"]
+
+            # 3. Offline queue poller fallback
+            inbox = os.path.join(sync_dir, "peer-queue", f"to_{rt.local_node}")
+            os.makedirs(inbox, exist_ok=True)
+            q_id = "job_offline_test"
+            with open(os.path.join(inbox, f"{q_id}.json"), "w", encoding="utf-8") as f:
+                json.dump({"job_id": q_id, "kind": "exec", "command": "echo drive-ok", "target_os": "wsl"}, f)
+            assert rt.poll_offline_queue_once() == 1
+            comp_path = os.path.join(sync_dir, "peer-queue", "completed", f"{q_id}.json")
+            deadline = time.time() + 8.0
+            while time.time() < deadline and not os.path.isfile(comp_path):
+                time.sleep(0.1)
+            assert os.path.isfile(comp_path), "Offline queue did not write completed result"
+            comp = json.load(open(comp_path, encoding="utf-8"))
+            assert comp["status"] == "completed" and "drive-ok" in comp["stdout"]
+
+            # 4. OpenClaw HA Lease conflict/expiry/takeover + openclaw.json migration
+            store = openclaw_ctl.LeaseStore(sync_dir)
+            ok1, _ = store.acquire_or_renew("torre", pid=111, ttl_s=30, now=1000.0)
+            assert ok1 is True
+            ok_conflict, _ = store.acquire_or_renew("portatil", pid=222, ttl_s=30, now=1010.0)
+            assert ok_conflict is False
+            ok_failover, l2 = store.acquire_or_renew("portatil", pid=222, ttl_s=30, now=1035.0)
+            assert ok_failover is True and l2["holder_node"] == "portatil" and l2["epoch"] == 2
+            ok_takeover, l3 = store.acquire_or_renew("torre", pid=333, ttl_s=30, force=True, manual_leader="torre", now=1040.0)
+            assert ok_takeover is True and l3["holder_node"] == "torre" and l3["epoch"] == 3
+
+            oc_cfg_p = os.path.join(tmp, "openclaw.json")
+            with open(oc_cfg_p, "w", encoding="utf-8") as f:
+                json.dump({
+                    "models": {"providers": {"cluster-local": {"baseUrl": "http://127.0.0.1:1238/v1"}}},
+                    "channels": {"telegram": {"enabled": True, "botToken": "123:ABC", "allowFrom": ["999"]}},
+                    "agents": {"defaults": {"workspace": os.path.join(tmp, "ws"), "model": {"primary": "cluster-local/old", "fallbacks": ["google/gemini-3.8-flash"]}}},
+                }, f)
+            openclaw_ctl.configure_openclaw(config_path=oc_cfg_p)
+            migrated = json.load(open(oc_cfg_p, encoding="utf-8"))
+            assert migrated["channels"]["telegram"]["botToken"] == "123:ABC"
+            assert migrated["models"]["providers"]["cluster-local"]["baseUrl"] == "http://127.0.0.1:1235/v1"
+            assert migrated["agents"]["defaults"]["model"]["primary"] == "cluster-local/cluster/code"
+            assert "google/gemini-3.8-flash" in migrated["agents"]["defaults"]["model"]["fallbacks"]
+            assert os.path.isfile(os.path.join(tmp, "ws", "AGENTS.md"))
+
+            # 5. Stdio MCP roundtrip for peer_status & openclaw_control(status)
+            mcp_env = dict(os.environ)
+            mcp_env["CLUSTER_PEER_TOKEN"] = tok
+            mcp_env["CLUSTER_PEER_SYNC_DIR"] = sync_dir
+            m_proc = subprocess.Popen(
+                [sys.executable, os.path.join(REPO_ROOT, "mcp", "cluster_mcp_server.py")],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=mcp_env,
+            )
+            try:
+                def _ms(o):
+                    m_proc.stdin.write((json.dumps(o) + "\n").encode("utf-8"))
+                    m_proc.stdin.flush()
+
+                def _mr():
+                    return json.loads(m_proc.stdout.readline().decode("utf-8"))
+
+                _ms({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05"}})
+                assert _mr()["result"]["serverInfo"]["name"] == "cluster-hw-llm"
+                _ms({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+                _ms({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "peer_status", "arguments": {}}})
+                ps_out = json.loads(_mr()["result"]["content"][0]["text"])
+                assert ps_out["token_configured"] is True and "nodes" in ps_out
+                _ms({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "openclaw_control", "arguments": {"action": "status"}}})
+                oc_out = json.loads(_mr()["result"]["content"][0]["text"])
+                assert "local_node" in oc_out and "lease" in oc_out
+            finally:
+                m_proc.stdin.close()
+                m_proc.wait(timeout=5)
+                assert m_proc.returncode == 0
+        finally:
+            rt.stop()
+            for s in srvs:
+                s.shutdown()
+                s.server_close()
+
+    print("[PASS] Peer daemon (:1236 auth, /exec, Drive offline queue) + OpenClaw HA lease & config migration verified")
+
+
 def check_privacy(files):
     generic_patterns = [
         ("tailscale_cgnat_ip", re.compile(r"\b100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b")),
@@ -861,6 +994,7 @@ def main():
         check_hooks()
         check_install_matrix()
         check_gateway_and_clients()
+        check_peer_and_openclaw()
     if args.check_privacy:
         check_privacy(files)
     if args.live:
