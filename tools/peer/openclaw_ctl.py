@@ -454,14 +454,33 @@ def configure_openclaw(cfg=None, config_path=None):
 
 
 class LeaseStore:
-    """Atomic JSON HA lease in `<sync_dir>/openclaw-ha/leader.json` (DrvFS / Google Drive safe)."""
+    """Atomic JSON HA lease in `<sync_dir>/openclaw-ha/leader.json` with optional fast Tailscale witness."""
 
-    def __init__(self, sync_dir):
+    def __init__(self, sync_dir, witness_url=None, token=None):
         self.sync_dir = sync_dir
+        self.witness_url = (witness_url or "").strip().rstrip("/")
+        self.token = (token or "").strip()
         self.ha_dir = os.path.join(sync_dir, "openclaw-ha") if sync_dir else os.path.join(state_dir(), "openclaw-ha")
         self.lease_path = os.path.join(self.ha_dir, "leader.json")
 
+    def _witness_call(self, method="GET", payload=None, timeout=1.2):
+        if not self.witness_url or not self.token:
+            return None
+        data = None if payload is None else json.dumps(payload).encode("utf-8")
+        hdrs = {"Authorization": f"Bearer {self.token}"}
+        if payload is not None:
+            hdrs["Content-Type"] = "application/json"
+        req = urllib.request.Request(self.witness_url + "/ha/lease", data=data, headers=hdrs, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8", "replace"))
+        except Exception:
+            return None
+
     def read_lease(self):
+        w_res = self._witness_call("GET")
+        if isinstance(w_res, dict) and isinstance(w_res.get("lease"), dict):
+            return w_res["lease"]
         if not os.path.isfile(self.lease_path):
             return None
         try:
@@ -480,6 +499,25 @@ class LeaseStore:
         return rec
 
     def acquire_or_renew(self, node_name, pid=None, ttl_s=30, force=False, manual_leader=None, now=None):
+        if now is None and self.witness_url and self.token:
+            w_res = self._witness_call(
+                "POST",
+                {
+                    "action": "acquire_or_renew",
+                    "node_name": node_name,
+                    "pid": pid,
+                    "ttl_s": ttl_s,
+                    "force": bool(force),
+                    "manual_leader": manual_leader,
+                },
+            )
+            if isinstance(w_res, dict) and isinstance(w_res.get("lease"), dict):
+                try:
+                    self.write_lease(w_res["lease"])
+                except Exception:
+                    pass
+                return bool(w_res.get("acquired")), w_res["lease"]
+
         ts = time.time() if now is None else now
         cur = self.read_lease()
         if not force and cur:
@@ -510,6 +548,16 @@ class LeaseStore:
         return True, rec
 
     def release(self, node_name, now=None):
+        if now is None and self.witness_url and self.token:
+            w_res = self._witness_call("POST", {"action": "release", "node_name": node_name})
+            if isinstance(w_res, dict) and "released" in w_res:
+                if isinstance(w_res.get("lease"), dict):
+                    try:
+                        self.write_lease(w_res["lease"])
+                    except Exception:
+                        pass
+                return bool(w_res["released"])
+
         ts = time.time() if now is None else now
         cur = self.read_lease()
         if not cur or cur.get("holder_node") != node_name or cur.get("state") != "LEADER":
@@ -522,6 +570,22 @@ class LeaseStore:
             cur["manual_leader"] = None
         self.write_lease(cur)
         return True
+
+
+def get_lease_store(cfg=None):
+    cfg = cfg or cluster_lib.load_cluster_config(REPO_ROOT)
+    sdir = resolve_sync_dir(cfg)
+    tok = resolve_peer_token(cfg, sdir)
+    oc_cfg = ((cfg.get("peer") or {}).get("openclaw") or {})
+    w_node = (oc_cfg.get("witness_node") or "raspberrypi").strip()
+    local_node = (cfg.get("local_node") or "torre").strip()
+    w_url = ""
+    if w_node and w_node != local_node:
+        nd = (cfg.get("nodes") or {}).get(w_node) or {}
+        cand = (nd.get("peer_url") or "").strip()
+        if cand and "<" not in cand:
+            w_url = cand
+    return LeaseStore(sdir, witness_url=w_url, token=tok)
 
 
 def _oc_pid_file():
@@ -708,7 +772,7 @@ def cmd_start(cfg, force=False, manual_leader=None):
     oc_cfg = ((cfg.get("peer") or {}).get("openclaw") or {})
     ttl_s = int(oc_cfg.get("lease_ttl_s") or 30)
     port = int(oc_cfg.get("port") or 18789)
-    store = LeaseStore(resolve_sync_dir(cfg))
+    store = get_lease_store(cfg)
 
     cur_pid = _read_pid(_oc_pid_file())
     if cur_pid:
@@ -780,7 +844,7 @@ def cmd_stop(cfg, release_lease=True):
             pass
     swept = sweep_orphan_openclaw()
     if release_lease:
-        LeaseStore(resolve_sync_dir(cfg)).release(local_node)
+        get_lease_store(cfg).release(local_node)
     return {"ok": True, "node": local_node, "stopped_pid": pid, "swept_orphans": swept}
 
 
@@ -800,7 +864,7 @@ def cmd_status(cfg):
     port = int(oc_cfg.get("port") or 18789)
     pid = _read_pid(_oc_pid_file())
     sentinel_pid = _read_pid(_sentinel_pid_file())
-    lease = LeaseStore(resolve_sync_dir(cfg)).read_lease()
+    lease = get_lease_store(cfg).read_lease()
     cpath = openclaw_config_path()
     tg_ok = False
     gw_url = None
@@ -870,7 +934,7 @@ def run_sentinel_loop(cfg, once=False):
     ttl_s = int(oc_cfg.get("lease_ttl_s") or 30)
     interval_s = max(3, int(oc_cfg.get("probe_interval_s") or 10))
     need_fails = max(1, int(oc_cfg.get("failures_before_failover") or 3))
-    store = LeaseStore(resolve_sync_dir(cfg))
+    store = get_lease_store(cfg)
     failures = 0
 
     with open(_sentinel_pid_file(), "w", encoding="utf-8") as f:

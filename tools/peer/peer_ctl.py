@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Cross-OS controller & client CLI for the Bidirectional Peer Order Bridge (:1236) and OpenClaw HA."""
 import argparse
+import base64
 import json
 import os
+import re
 import secrets
 import signal
 import subprocess
@@ -70,10 +72,84 @@ def _is_healthy(base_url):
         return False
 
 
+def _discover_ssh_and_tailscale_peers():
+    """Parse ~/.ssh/config and tailscale status to auto-populate peer_url and ssh_target."""
+    alias_map = {
+        "rpi": "raspberrypi",
+        "raspberrypi": "raspberrypi",
+        "arduq": "arduq",
+        "hector-pc": "torre",
+        "torre": "torre",
+        "hector-laptop": "portatil",
+        "portatil": "portatil",
+    }
+    discovered = {}
+    ssh_cfg = os.path.join(os.path.expanduser("~"), ".ssh", "config")
+    if os.path.isfile(ssh_cfg):
+        cur_hosts = []
+        cur_ip = ""
+        cur_user = ""
+        def _flush():
+            for h in cur_hosts:
+                node = alias_map.get(h.lower())
+                if node and cur_ip:
+                    entry = discovered.setdefault(node, {})
+                    if peer_daemon._TAILSCALE_IP_RE.fullmatch(cur_ip):
+                        entry["ip"] = cur_ip
+                    else:
+                        entry["host"] = cur_ip
+                    if cur_user:
+                        entry["user"] = cur_user
+                        entry["ssh_target"] = f"{cur_user}@{cur_ip}"
+        with open(ssh_cfg, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                parts = s.split(None, 1)
+                if len(parts) < 2:
+                    continue
+                k, v = parts[0].lower(), parts[1].strip()
+                if k == "host":
+                    _flush()
+                    cur_hosts = [x for x in v.split() if "*" not in x]
+                    cur_ip = ""
+                    cur_user = ""
+                elif k == "hostname":
+                    cur_ip = v
+                elif k == "user":
+                    cur_user = v
+            _flush()
+
+    for cmd in (["tailscale", "status", "--json"], ["tailscale.exe", "status", "--json"]):
+        try:
+            r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=3)
+            if r.returncode == 0 and r.stdout.strip():
+                ts_data = json.loads(r.stdout)
+                peers = list((ts_data.get("Peer") or {}).values())
+                if ts_data.get("Self"):
+                    peers.append(ts_data["Self"])
+                for p in peers:
+                    hname = str(p.get("HostName") or "").strip().lower()
+                    dns = str(p.get("DNSName") or "").split(".")[0].strip().lower()
+                    node = alias_map.get(hname) or alias_map.get(dns)
+                    ips = [ip for ip in (p.get("TailscaleIPs") or []) if peer_daemon._TAILSCALE_IP_RE.fullmatch(str(ip))]
+                    if node and ips:
+                        entry = discovered.setdefault(node, {})
+                        entry["ip"] = ips[0]
+                        if entry.get("user"):
+                            entry["ssh_target"] = f"{entry['user']}@{ips[0]}"
+                break
+        except Exception:
+            continue
+    return discovered
+
+
 def cmd_init_token(cfg, sync_dir_override=""):
+    ex_path = os.path.join(REPO_ROOT, "cluster.example.json")
+    ex = json.load(open(ex_path, encoding="utf-8")) if os.path.isfile(ex_path) else {}
     local_cfg_path = os.path.join(REPO_ROOT, "cluster.local.json")
     if not os.path.isfile(local_cfg_path):
-        ex = json.load(open(os.path.join(REPO_ROOT, "cluster.example.json"), encoding="utf-8"))
         with open(local_cfg_path, "w", encoding="utf-8") as f:
             json.dump(ex, f, indent=2)
             f.write("\n")
@@ -85,6 +161,7 @@ def cmd_init_token(cfg, sync_dir_override=""):
     peer_sec.setdefault("openclaw", {
         "enabled": True,
         "primary_node": "torre",
+        "witness_node": "raspberrypi",
         "responder": "antigravity",
         "agy_autonomous": True,
         "agy_cwd": "~",
@@ -94,6 +171,13 @@ def cmd_init_token(cfg, sync_dir_override=""):
         "failures_before_failover": 3,
     })
     peer_sec["openclaw"].setdefault("responder", "antigravity")
+    peer_sec["openclaw"].setdefault("witness_node", "raspberrypi")
+
+    # Merge any new node skeletons from cluster.example.json (e.g. raspberrypi, arduq)
+    nodes_sec = raw.setdefault("nodes", {})
+    for nname, ex_nd in (ex.get("nodes") or {}).items():
+        if nname not in nodes_sec:
+            nodes_sec[nname] = json.loads(json.dumps(ex_nd))
 
     sync_dir = sync_dir_override or openclaw_ctl.resolve_sync_dir(raw)
     if sync_dir:
@@ -117,16 +201,23 @@ def cmd_init_token(cfg, sync_dir_override=""):
         except OSError:
             pass
 
-    # Auto-populate peer_url from each node's base_url host or local Tailscale IP
+    # Auto-populate peer_url and ssh_target from base_url, ~/.ssh/config, or Tailscale status
     port = int(peer_sec["port"])
     local_node = raw.get("local_node") or "torre"
     local_ts = peer_daemon.detect_local_tailscale_ip(raw)
-    for nname, nd in (raw.get("nodes") or {}).items():
+    discovered = _discover_ssh_and_tailscale_peers()
+    for nname, nd in nodes_sec.items():
+        disc = discovered.get(nname) or {}
+        cur_ssh = (nd.get("ssh_target") or "").strip()
+        if (not cur_ssh or "<" in cur_ssh or "@" in cur_ssh and not peer_daemon._TAILSCALE_IP_RE.search(cur_ssh)) and disc.get("ssh_target"):
+            nd["ssh_target"] = disc["ssh_target"]
         cur_p = (nd.get("peer_url") or "").strip()
-        if cur_p and "<" not in cur_p:
+        if cur_p and "<" not in cur_p and peer_daemon._TAILSCALE_IP_RE.search(cur_p):
             continue
         if nname == local_node and local_ts:
             nd["peer_url"] = f"http://{local_ts}:{port}"
+        elif disc.get("ip"):
+            nd["peer_url"] = f"http://{disc['ip']}:{port}"
         else:
             burl = (nd.get("base_url") or "").strip()
             m = peer_daemon._TAILSCALE_IP_RE.search(burl)
@@ -137,7 +228,7 @@ def cmd_init_token(cfg, sync_dir_override=""):
         json.dump(raw, f, indent=2)
         f.write("\n")
 
-    return {"ok": True, "local_node": local_node, "sync_dir": sync_dir, "token_set": bool(tok), "peer_urls": {k: v.get("peer_url") for k, v in (raw.get("nodes") or {}).items()}}
+    return {"ok": True, "local_node": local_node, "sync_dir": sync_dir, "token_set": bool(tok), "peer_urls": {k: v.get("peer_url") for k, v in nodes_sec.items()}}
 
 
 def cmd_start(cfg, wait_s=6.0):
@@ -393,6 +484,118 @@ def cmd_autostart_boot(cfg):
     return {"ok": True, "peer": p_res, "sentinel": s_res}
 
 
+def deploy_edge_node(cfg, target_node):
+    """Push zero-dependency peer daemon bundle over SSH to a Linux edge node (raspberrypi / arduq)."""
+    nodes = cfg.get("nodes") or {}
+    if target_node == "all":
+        targets = [n for n, nd in nodes.items() if str(nd.get("role") or "").startswith("edge-")]
+        results = {t: deploy_edge_node(cfg, t) for t in targets}
+        return {"ok": all(r.get("ok") for r in results.values()), "nodes": results}
+
+    nd = nodes.get(target_node) or {}
+    if not nd:
+        return {"ok": False, "node": target_node, "error": f"Unknown node {target_node!r}"}
+    ssh_target = (nd.get("ssh_target") or "").strip()
+    if not ssh_target or "<" in ssh_target:
+        disc = _discover_ssh_and_tailscale_peers().get(target_node) or {}
+        ssh_target = disc.get("ssh_target") or target_node
+
+    tok = openclaw_ctl.resolve_peer_token(cfg)
+    if not tok:
+        return {"ok": False, "node": target_node, "error": "Peer token not configured; run init-token first"}
+
+    port = int(((cfg.get("peer") or {}).get("port") or 1236))
+    edge_cfg = {
+        "schema_version": 1,
+        "cluster_name": cfg.get("cluster_name") or "cluster-hw-llm-optimization",
+        "local_node": target_node,
+        "peer": {
+            "port": port,
+            "token": tok,
+            "sync_dir": "",
+            "default_mode": "auto",
+            "openclaw": {
+                "enabled": False,
+                "primary_node": "torre",
+                "witness_node": "raspberrypi",
+                "responder": "antigravity",
+            },
+        },
+        "nodes": nodes,
+    }
+
+    files_payload = {
+        "cluster.example.json": open(os.path.join(REPO_ROOT, "cluster.example.json"), encoding="utf-8").read(),
+        "cluster.local.json": json.dumps(edge_cfg, indent=2) + "\n",
+        "tools/cluster_lib.py": open(os.path.join(TOOLS_DIR, "cluster_lib.py"), encoding="utf-8").read(),
+        "tools/peer/openclaw_ctl.py": open(os.path.join(PEER_DIR, "openclaw_ctl.py"), encoding="utf-8").read(),
+        "tools/peer/peer_daemon.py": open(os.path.join(PEER_DIR, "peer_daemon.py"), encoding="utf-8").read(),
+        "tools/peer/peer_ctl.py": open(os.path.join(PEER_DIR, "peer_ctl.py"), encoding="utf-8").read(),
+    }
+
+    remote_py = (
+        "import json, os, subprocess, sys\n"
+        "payload = json.loads(sys.stdin.read())\n"
+        "root = os.path.expanduser('~/.cluster-peer')\n"
+        "for rel, content in payload.items():\n"
+        "    p = os.path.join(root, rel)\n"
+        "    os.makedirs(os.path.dirname(p), exist_ok=True)\n"
+        "    with open(p, 'w', encoding='utf-8') as f:\n"
+        "        f.write(content)\n"
+        "    if p.endswith('.py'):\n"
+        "        os.chmod(p, 0o755)\n"
+        "    elif p.endswith('.json'):\n"
+        "        os.chmod(p, 0o600)\n"
+        "# Retire legacy :1239 cluster_bridge.py if running\n"
+        "subprocess.run(['pkill', '-f', 'cluster_bridge.py'], stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "ctl = os.path.join(root, 'tools', 'peer', 'peer_ctl.py')\n"
+        "r1 = subprocess.run([sys.executable, ctl, 'restart'], stdin=subprocess.DEVNULL, capture_output=True, text=True)\n"
+        "subprocess.run([sys.executable, ctl, 'install-autostart'], stdin=subprocess.DEVNULL, capture_output=True, text=True)\n"
+        "subprocess.run(['systemctl', '--user', 'daemon-reload'], stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "subprocess.run(['systemctl', '--user', 'enable', 'cluster-peer-openclaw.service'], stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "# Ensure @reboot crontab fallback for embedded Linux without systemd user session lingering\n"
+        "cron_line = f'@reboot /usr/bin/python3 {ctl} start >/dev/null 2>&1'\n"
+        "cr = subprocess.run(['crontab', '-l'], stdin=subprocess.DEVNULL, capture_output=True, text=True)\n"
+        "lines = [ln for ln in (cr.stdout or '').splitlines() if 'cluster_bridge.py' not in ln and ctl not in ln]\n"
+        "lines.append(cron_line)\n"
+        "subprocess.run(['crontab', '-'], input='\\n'.join(lines) + '\\n', text=True, capture_output=True)\n"
+        "print(r1.stdout.strip() or json.dumps({'ok': r1.returncode == 0, 'stderr': r1.stderr.strip()}))\n"
+    )
+
+    script_b64 = base64.b64encode(remote_py.encode("utf-8")).decode("ascii")
+    remote_cmd = f"python3 -c \"import base64; exec(base64.b64decode('{script_b64}').decode('utf-8'))\""
+
+    try:
+        r = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", ssh_target, remote_cmd],
+            input=json.dumps(files_payload),
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        return {"ok": False, "node": target_node, "ssh_target": ssh_target, "error": str(exc)}
+
+    if r.returncode != 0:
+        return {"ok": False, "node": target_node, "ssh_target": ssh_target, "error": (r.stderr or r.stdout).strip()}
+
+    remote_res = {}
+    try:
+        remote_res = json.loads(r.stdout.strip().splitlines()[-1])
+    except Exception:
+        remote_res = {"raw": r.stdout.strip()}
+
+    st = collect_status(cfg, node_filter=target_node)
+    node_st = (st.get("nodes") or {}).get(target_node) or {}
+    return {
+        "ok": bool(node_st.get("reachable")),
+        "node": target_node,
+        "ssh_target": ssh_target,
+        "remote": remote_res,
+        "status": node_st,
+    }
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Bidirectional Peer Bridge & OpenClaw controller")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -439,6 +642,8 @@ def main(argv=None):
     pua = sub.add_parser("uninstall-autostart")
     pua.add_argument("--dry-run", action="store_true")
     sub.add_parser("autostart-boot")
+    pde = sub.add_parser("deploy-edge")
+    pde.add_argument("--to", default="all", help="Edge node name (raspberrypi, arduq, or all)")
 
     args = ap.parse_args(argv)
     cfg = cluster_lib.load_cluster_config(REPO_ROOT)
@@ -492,6 +697,8 @@ def main(argv=None):
         res = cmd_uninstall_autostart(dry_run=args.dry_run)
     elif args.cmd == "autostart-boot":
         res = cmd_autostart_boot(cfg)
+    elif args.cmd == "deploy-edge":
+        res = deploy_edge_node(cfg, target_node=args.to)
     else:
         return 1
 

@@ -118,6 +118,8 @@ class PeerRuntime:
         os.makedirs(self.jobs_dir, exist_ok=True)
         self._jobs_lock = threading.Lock()
         self._jobs = {}
+        self._witness_store = openclaw_ctl.LeaseStore(os.path.join(openclaw_ctl.state_dir(), "witness-ha"))
+        self._witness_lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="peer-worker")
         self._stop_event = threading.Event()
 
@@ -437,6 +439,11 @@ def make_handler(runtime: PeerRuntime):
             if path == "/jobs":
                 self._send_json(200, {"ok": True, "node": runtime.local_node, "jobs": runtime.list_jobs(limit=25)})
                 return
+            if path == "/ha/lease":
+                with runtime._witness_lock:
+                    lease = runtime._witness_store.read_lease()
+                self._send_json(200, {"ok": True, "witness_node": runtime.local_node, "lease": lease})
+                return
             if path.startswith("/jobs/"):
                 jid = path[len("/jobs/"):].strip("/")
                 job = runtime.get_job(jid)
@@ -499,6 +506,27 @@ def make_handler(runtime: PeerRuntime):
             if path == "/openclaw/sync-secrets":
                 res = openclaw_ctl.merge_openclaw_secrets(body.get("secrets") or {})
                 self._send_json(200, res)
+                return
+
+            if path == "/ha/lease":
+                act = (body.get("action") or "acquire_or_renew").strip().lower()
+                node_name = (body.get("node_name") or "").strip()
+                if not node_name:
+                    self._send_json(400, {"ok": False, "error": "Missing 'node_name'"})
+                    return
+                with runtime._witness_lock:
+                    if act == "release":
+                        rel = runtime._witness_store.release(node_name)
+                        self._send_json(200, {"ok": True, "released": rel, "lease": runtime._witness_store.read_lease()})
+                        return
+                    ok, rec = runtime._witness_store.acquire_or_renew(
+                        node_name,
+                        pid=body.get("pid"),
+                        ttl_s=float(body.get("ttl_s") or 30.0),
+                        force=bool(body.get("force")),
+                        manual_leader=body.get("manual_leader"),
+                    )
+                self._send_json(200, {"ok": True, "acquired": ok, "lease": rec})
                 return
 
             self._send_json(404, {"ok": False, "error": f"Unknown path {path}"})

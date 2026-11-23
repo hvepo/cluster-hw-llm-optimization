@@ -1,6 +1,6 @@
-# Bidirectional Peer Order Bridge & OpenClaw Telegram HA
+# Bidirectional Peer Order Bridge & OpenClaw Telegram HA (5-Device Tailscale Mesh)
 
-Send autonomous tasks bidirectionally between **`torre` (PC)** and **`portatil` (Laptop)** across **WSL, Windows, or Crossed** sessions, and control **OpenClaw** + your **Telegram Mobile Bot** from either machine without `409 Conflict` split-brain errors.
+Send autonomous tasks and shell commands across **`torre` (PC)**, **`portatil` (Laptop)**, **`raspberrypi` (Raspberry Pi 2 Model B HA Witness)**, **`arduq` (Arduino UNO Q Dual-Processor QRB2210 Linux MPU + STM32U585 MCU)**, and **`pixel-9` (Mobile Phone via Telegram Bot)** without `409 Conflict` split-brain errors.
 
 ---
 
@@ -8,26 +8,32 @@ Send autonomous tasks bidirectionally between **`torre` (PC)** and **`portatil` 
 
 ```mermaid
 flowchart TD
-    Phone["Mobile Phone (Telegram Bot)"]
+    Phone["pixel-9 Mobile Phone (Telegram Bot)"]
     Bridge["Telegram-Antigravity Responder (WSL, Active Leader)"]
     Agy["Antigravity CLI (Default Responder, cwd=~, full perms)"]
     TorreAgy["torre Antigravity / IDE (WSL or Windows)"]
     PortatilAgy["portatil Antigravity / IDE (WSL or Windows)"]
     TorrePeer["torre Peer Daemon (:1236 Tailscale + 127.0.0.1)"]
     PortatilPeer["portatil Peer Daemon (:1236 Tailscale + 127.0.0.1)"]
-    Drive["Google Drive Sync (peer-queue + openclaw-ha/leader.json)"]
+    RpiPeer["raspberrypi Peer Daemon & HA Witness (:1236 /ha/lease)"]
+    ArduqPeer["arduq Arduino UNO Q Peer Daemon (:1236 QRB2210 + STM32U585)"]
+    Drive["Google Drive Sync (peer-queue + leader.json mirror)"]
     Gateway["Cluster Router Gateway (:1235 -> cluster/* LM Link)"]
 
     Phone <-->|"Allowlisted Telegram DM"| Bridge
     Bridge -->|"Default responder (no local model wakeup)"| Agy
     Agy -.->|"Optional delegation when needed"| Gateway
-    Agy -.->|"peer_ctl.py send/exec --to torre|portatil"| TorrePeer
-    Agy -.->|"peer_ctl.py send/exec --to torre|portatil"| PortatilPeer
+    Agy -.->|"cluster-peer send/exec --to <node>"| TorrePeer
+    Agy -.->|"cluster-peer send/exec --to <node>"| PortatilPeer
+    Agy -.->|"cluster-peer exec --to raspberrypi|arduq"| RpiPeer
+    Agy -.->|"cluster-peer exec --to raspberrypi|arduq"| ArduqPeer
     TorreAgy <-->|"MCP peer_* / openclaw_control"| TorrePeer
     PortatilAgy <-->|"MCP peer_* / openclaw_control"| PortatilPeer
     TorrePeer <-->|"Fast-Path HTTP (:1236 + Bearer Token)"| PortatilPeer
-    TorrePeer <-->|"Offline Queue + HA Lease"| Drive
-    PortatilPeer <-->|"Offline Queue + HA Lease"| Drive
+    TorrePeer <-->|"Fast HA Witness Lease (<15ms)"| RpiPeer
+    PortatilPeer <-->|"Fast HA Witness Lease (<15ms)"| RpiPeer
+    TorrePeer <-->|"Offline Queue + HA Lease Fallback"| Drive
+    PortatilPeer <-->|"Offline Queue + HA Lease Fallback"| Drive
 ```
 
 ---
@@ -74,6 +80,11 @@ python3 tools/peer/openclaw_ctl.py status
 # Send an Antigravity task from PC -> Laptop (WSL) or Laptop -> PC (Windows)
 python3 tools/peer/peer_ctl.py send --to portatil --os wsl --wait 120 "Run git pull and doctor"
 python3 tools/peer/peer_ctl.py exec --to torre --os windows "nvidia-smi"
+
+# Deploy or update the zero-dependency peer daemon on Linux edge nodes (raspberrypi & arduq)
+python3 tools/peer/peer_ctl.py deploy-edge --to all
+python3 tools/peer/peer_ctl.py exec --to raspberrypi "uname -a && uptime"
+python3 tools/peer/peer_ctl.py exec --to arduq "uname -a && lscpu"
 
 # Transfer OpenClaw Telegram leadership to the current machine
 python3 tools/peer/openclaw_ctl.py takeover

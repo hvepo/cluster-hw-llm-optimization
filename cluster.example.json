@@ -16,6 +16,7 @@
     "openclaw": {
       "enabled": true,
       "primary_node": "torre",
+      "witness_node": "raspberrypi",
       "responder": "antigravity",
       "agy_autonomous": true,
       "agy_cwd": "~",
@@ -87,6 +88,34 @@
       "paths": {
         "lmstudio_home": "<PORTATIL_LMSTUDIO_HOME>",
         "lms_cli": "<PORTATIL_LMS_CLI>"
+      }
+    },
+    "raspberrypi": {
+      "label": "raspberrypi",
+      "role": "edge-arm-witness",
+      "os": "linux",
+      "base_url": "",
+      "peer_url": "http://<RASPBERRYPI_TAILSCALE_IP>:1236",
+      "ssh_target": "<USER>@<RASPBERRYPI_TAILSCALE_IP>",
+      "model_prefixes": [],
+      "hardware": {
+        "board": "Raspberry Pi 2 Model B",
+        "cpu": "ARMv7 Cortex-A7 (armv7l)",
+        "ram": "1 GiB"
+      }
+    },
+    "arduq": {
+      "label": "arduq",
+      "role": "edge-dual-mpu-mcu",
+      "os": "linux",
+      "base_url": "",
+      "peer_url": "http://<ARDUQ_TAILSCALE_IP>:1236",
+      "ssh_target": "arduino@<ARDUQ_TAILSCALE_IP>",
+      "model_prefixes": [],
+      "hardware": {
+        "board": "Arduino UNO Q (Dual Processor)",
+        "mpu": "Qualcomm Dragonwing QRB2210 (aarch64 Linux)",
+        "mcu": "STM32U585 (Cortex-M33)"
       }
     }
   }

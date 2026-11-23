@@ -60,6 +60,8 @@ def collect_status(cfg, node_filter=None):
         if node_filter and node_name != node_filter:
             continue
         url = (node_cfg.get("base_url") or "").rstrip("/")
+        if not url and str(node_cfg.get("role") or "").startswith("edge-") and node_filter != node_name:
+            continue
         prefixes = tuple(node_cfg.get("model_prefixes", []))
         info = {"base_url": url, "prefixes": list(prefixes), "reachable": False, "loaded_local": [], "loaded_remote": []}
         if not url or "<" in url:

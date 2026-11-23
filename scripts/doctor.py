@@ -917,6 +917,20 @@ def check_peer_and_openclaw():
             ok_takeover, l3 = store.acquire_or_renew("torre", pid=333, ttl_s=30, force=True, manual_leader="torre", now=1040.0)
             assert ok_takeover is True and l3["holder_node"] == "torre" and l3["epoch"] == 3
 
+            # 4a. Fast Tailscale Witness HA Lease (/ha/lease on peer_daemon) + local Drive mirror
+            w_sync = os.path.join(tmp, "witness_mirror")
+            os.makedirs(w_sync, exist_ok=True)
+            w_store = openclaw_ctl.LeaseStore(w_sync, witness_url=base, token=tok)
+            w_ok1, w_l1 = w_store.acquire_or_renew("torre", pid=501, ttl_s=30)
+            assert w_ok1 is True and w_l1["holder_node"] == "torre"
+            w_ok_conflict, _ = w_store.acquire_or_renew("portatil", pid=502, ttl_s=30)
+            assert w_ok_conflict is False
+            assert w_store.release("torre") is True
+            assert w_store.release("torre") is False
+            w_ok2, w_l2 = w_store.acquire_or_renew("portatil", pid=502, ttl_s=30)
+            assert w_ok2 is True and w_l2["holder_node"] == "portatil"
+            assert os.path.isfile(os.path.join(w_sync, "openclaw-ha", "leader.json"))
+
             oc_home = os.path.join(tmp, "oc_home")
             os.makedirs(oc_home, exist_ok=True)
             if os.name != "nt":

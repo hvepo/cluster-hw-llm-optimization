@@ -331,8 +331,10 @@ def build_telegram_prompt(user_text, local_node, is_new_session=True):
     return (
         f"[Telegram Bridge | Active Node: {local_node} | Context: project-independent]\n"
         "You are Antigravity, the user's primary assistant on Telegram.\n"
+        "Cluster mesh nodes on Tailscale (:1236): compute nodes 'torre' (PC) and 'portatil' (Laptop), "
+        "plus Linux edge nodes 'raspberrypi' (Raspberry Pi 2 Model B witness) and 'arduq' (Arduino UNO Q dual-processor QRB2210 Linux MPU + STM32U585 MCU).\n"
         "Respond directly and concisely for mobile reading. Do NOT load or call local cluster LM Studio models "
-        "unless you decide delegating to cluster tools/subagents (or a sibling node via peer_ctl) clearly benefits the request.\n\n"
+        "unless you decide delegating to cluster tools/subagents (or a peer node via cluster-peer) clearly benefits the request.\n\n"
         f"User message:\n{user_text}"
     )
 
@@ -577,7 +579,7 @@ def run_daemon(repo_root=REPO_ROOT, poll_timeout=25):
         except TelegramConflictError as exc:
             print(f"[telegram-agy] {exc}; releasing lease and stopping poller", flush=True)
             try:
-                openclaw_ctl.LeaseStore(sync_dir).release(local_node)
+                openclaw_ctl.get_lease_store(cfg).release(local_node)
             except Exception:
                 pass
             return 49
