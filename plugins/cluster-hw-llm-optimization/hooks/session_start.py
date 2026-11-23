@@ -16,12 +16,19 @@ def main():
         cfg = cluster_lib.load_cluster_config(root)
         plat = cluster_lib.detect_platform()
         local_node = cfg.get("local_node", "torre")
-        nodes = {n: v.get("base_url", "") for n, v in cfg.get("nodes", {}).items()}
+        gw = cfg.get("gateway") or {}
+        gw_host = gw.get("host") or "127.0.0.1"
+        gw_port = int(gw.get("port") or 1235)
+        peer_cfg = cfg.get("peer") or {}
+        peer_port = int(peer_cfg.get("port") or 1236)
+        responder = str((peer_cfg.get("openclaw") or {}).get("responder") or "antigravity").strip().lower()
         msg = (
             f"[cluster-hw-llm] host={plat} local_node={local_node} "
-            f"endpoints={json.dumps(nodes)} | "
-            "Use MCP server `cluster-hw-llm` (or tools/cluster_ctl.py) for prefix-isolated load/unload, "
-            "and preserve LM Studio permanent defaults."
+            f"gateway=http://{gw_host}:{gw_port} peer=http://127.0.0.1:{peer_port} "
+            f"telegram_responder={responder} | "
+            "Horizontal resources available from any project: MCP 'cluster-hw-llm' "
+            "(hw_*, llm_*, node_*, cluster_*, peer_*, openclaw_control) and global CLIs "
+            "(cluster-peer, cluster-telegram, cluster-llm, cluster-gateway, cluster-chat, cluster-hw)."
         )
     except Exception as exc:
         msg = f"[cluster-hw-llm] repo={root} (config fallback: {exc})"

@@ -1,12 +1,12 @@
 {
   "name": "cluster-hw-llm-optimization",
-  "displayName": "Cluster HW Profiler & LLM Fine-Tuner",
-  "description": "Hardware, BIOS, and driver profiler plus per-node local LLM serving hill-climber and stability certification suite across Windows and WSL.",
-  "version": "1.2.0",
+  "displayName": "Cluster Horizontal Platform (HW, LLMs, Peer & Telegram)",
+  "description": "Cross-project hardware/BIOS profiler, per-node LLM serving tuner, 5-protocol :1235 Cluster Gateway, bidirectional :1236 Peer Bridge, and Antigravity-first Telegram HA responder across Windows and WSL.",
+  "version": "1.3.0",
   "author": "cluster-hw-llm-optimization contributors",
   "suggestedPrompts": [
-    "Profile this node's hardware, BIOS, drivers, power plan, and Event Log health with hw_node_profile",
-    "Compute theoretical ceilings and fine-tune LLM serving parameters for a model on this cluster node",
-    "List live cluster/* aliases with cluster_models and delegate a coding or reasoning prompt to your local cluster with cluster_chat"
+    "Check live cluster/* models, peer node health, and Telegram HA status with cluster_models and peer_status",
+    "Run a cross-OS command or autonomous Antigravity order on torre or portatil via peer_exec / peer_send_order",
+    "Profile node hardware stability or fine-tune LM Studio serving parameters with hw_node_profile and llm_compute_ceiling"
   ]
 }

@@ -163,9 +163,10 @@ class PeerRuntime:
         prompt = job["prompt"]
         target_os = job.get("target_os") or "auto"
         mode = job.get("mode") or self.default_mode
-        cwd = job.get("cwd") or self.repo_root
+        raw_cwd = str(job.get("cwd") or "").strip()
+        cwd = os.path.expanduser(raw_cwd) if raw_cwd else os.path.expanduser("~")
         if not os.path.isdir(cwd):
-            cwd = self.repo_root
+            cwd = os.path.expanduser("~")
 
         if target_os == "windows":
             prompt = f"[Target OS: Windows via powershell.exe -NoProfile -Command ... < /dev/null]\n{prompt}"
@@ -230,9 +231,10 @@ class PeerRuntime:
 
         target_os = job.get("target_os") or "auto"
         command = job["command"]
-        cwd = job.get("cwd") or self.repo_root
+        raw_cwd = str(job.get("cwd") or "").strip()
+        cwd = os.path.expanduser(raw_cwd) if raw_cwd else os.path.expanduser("~")
         if not os.path.isdir(cwd):
-            cwd = self.repo_root
+            cwd = os.path.expanduser("~")
         timeout_s = int(job.get("timeout_s") or 120)
 
         plat = cluster_lib.detect_platform()

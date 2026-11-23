@@ -21,7 +21,7 @@ import sys
 import tempfile
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-EXPECTED_SKILLS = {"hw-node-profiler", "llm-node-finetune", "cluster-install-migrate"}
+EXPECTED_SKILLS = {"hw-node-profiler", "llm-node-finetune", "cluster-install-migrate", "cluster-ops-bridge"}
 EXPECTED_AGENTS = {"cluster-coder.md", "cluster-fast-agent.md", "cluster-reasoning.md", "cluster-vision.md"}
 EXPECTED_MCP_TOOLS = {
     "hw_node_profile",
@@ -134,7 +134,7 @@ def check_json_and_plugin_schema(files):
     ):
         found = {d for d in os.listdir(sroot) if os.path.isdir(os.path.join(sroot, d))}
         assert found == EXPECTED_SKILLS, f"Skill mismatch in {sroot}: expected {EXPECTED_SKILLS}, got {found}"
-    print(f"[PASS] Validated {len(json_files)} JSON files + Antigravity plugin schema + 3 focused skills")
+    print(f"[PASS] Validated {len(json_files)} JSON files + Antigravity plugin schema + {len(EXPECTED_SKILLS)} focused skills")
 
     for node_name in ("torre", "portatil"):
         c_path = os.path.join(REPO_ROOT, "profiles", node_name, "continue-config.yaml")
@@ -195,7 +195,8 @@ def mcp_roundtrip(framing="ndjson", live=False):
         assert tools == EXPECTED_MCP_TOOLS, f"Expected MCP tools {EXPECTED_MCP_TOOLS}, got {tools}"
         write_msg({"jsonrpc": "2.0", "id": 3, "method": "resources/list", "params": {}})
         res_uris = [r["uri"] for r in read_msg()["result"]["resources"]]
-        assert len(res_uris) == 3, f"Expected 3 resources, got {res_uris}"
+        assert len(res_uris) == 5, f"Expected 5 resources, got {res_uris}"
+        assert "cluster://peer-telegram" in res_uris and "cluster://agent-collaboration" in res_uris
         write_msg({"jsonrpc": "2.0", "id": 31, "method": "resources/templates/list", "params": {}})
         assert read_msg()["result"] == {"resourceTemplates": []}
         write_msg({"jsonrpc": "2.0", "id": 32, "method": "prompts/list", "params": {}})
@@ -245,6 +246,18 @@ def check_hooks():
     assert d3["decision"] == "allow", f"Expected allow, got {d3}"
     s1 = run_hook(ses, {"hookEventName": "SessionStart"})
     assert "injectSteps" in s1 and s1["injectSteps"], f"Expected injectSteps, got {s1}"
+    r_foreign = subprocess.run(
+        [sys.executable, ses],
+        input=json.dumps({"hookEventName": "SessionStart"}),
+        cwd=tempfile.gettempdir(),
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert r_foreign.returncode == 0, f"Foreign-cwd SessionStart failed: {r_foreign.stderr}"
+    s_foreign = json.loads(r_foreign.stdout)
+    sys_msg = s_foreign["injectSteps"][0]["systemMessage"]["systemMessage"]
+    assert "cluster-peer" in sys_msg and "cluster-telegram" in sys_msg, f"Unexpected SessionStart msg: {sys_msg}"
     print("[PASS] Hook contracts verified (PreToolUse deny/ask/allow + SessionStart)")
 
 
@@ -726,6 +739,11 @@ def check_gateway_and_clients():
         with open(os.path.join(win_home, ".lmstudio", "mcp.json"), "w", encoding="utf-8") as f:
             json.dump({"mcpServers": {"browse": {"command": "browse.exe", "args": ["mcp"]}}}, f)
 
+        custom_bin = os.path.join(posix_home, ".local", "bin", "custom-user-tool")
+        os.makedirs(os.path.dirname(custom_bin), exist_ok=True)
+        with open(custom_bin, "w", encoding="utf-8") as f:
+            f.write("#!/usr/bin/env sh\necho custom\n")
+
         env = dict(os.environ)
         env["CLUSTER_INSTALL_POSIX_HOME"] = posix_home
         env["CLUSTER_INSTALL_WIN_HOME"] = win_home
@@ -751,6 +769,13 @@ def check_gateway_and_clients():
         assert "browse" in lms_mcp["mcpServers"] and "cluster-hw-llm" in lms_mcp["mcpServers"]
         assert os.path.isfile(os.path.join(posix_home, ".config", "cluster-llm", "env.sh"))
         assert os.path.isfile(os.path.join(win_home, ".config", "cluster-llm", "env.ps1"))
+        shim_names = ("cluster-peer", "cluster-telegram", "cluster-llm", "cluster-gateway", "cluster-chat", "cluster-hw", "cluster-doctor")
+        for sname in shim_names:
+            sp = os.path.join(posix_home, ".local", "bin", sname)
+            assert os.path.isfile(sp), f"Missing global CLI shim: {sp}"
+            assert "# managed-by: cluster-hw-llm-optimization" in open(sp, encoding="utf-8").read()
+            if os.name != "nt":
+                assert os.access(sp, os.X_OK), f"Global CLI shim not executable: {sp}"
         for cont_p in (
             os.path.join(win_home, ".continue", "config.yaml"),
             os.path.join(posix_home, ".continue", "config.yaml"),
@@ -780,6 +805,10 @@ def check_gateway_and_clients():
             stdin=subprocess.DEVNULL, env=env, text=True, capture_output=True, timeout=20,
         )
         assert r2.returncode == 0, f"setup_clients uninstall failed: {r2.stderr}"
+        for sname in shim_names:
+            sp = os.path.join(posix_home, ".local", "bin", sname)
+            assert not os.path.exists(sp), f"Managed CLI shim was not removed on uninstall: {sp}"
+        assert os.path.isfile(custom_bin), "Uninstall removed non-managed user script in ~/.local/bin!"
         oc_d2 = json.load(open(os.path.join(posix_home, ".config", "opencode", "opencode.json"), encoding="utf-8"))
         assert "other-oc" in oc_d2["mcp"]["servers"] and "provider" not in oc_d2
         byok2 = json.load(open(os.path.join(win_app, "Code", "User", "chatLanguageModels.json"), encoding="utf-8"))
@@ -838,16 +867,18 @@ def check_peer_and_openclaw():
                 st = json.loads(r.read().decode("utf-8"))
                 assert st["ok"] is True
 
-            # 2. POST /exec + GET /jobs/<id>
+            # 2. POST /exec + GET /jobs/<id> + default cwd=~
             req = urllib.request.Request(
                 base + "/exec",
-                data=json.dumps({"command": "echo peer-ok", "target_os": "wsl", "wait_s": 10}).encode("utf-8"),
+                data=json.dumps({"command": "echo peer-ok && pwd", "target_os": "wsl", "wait_s": 10}).encode("utf-8"),
                 headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=10) as r:
                 ex = json.loads(r.read().decode("utf-8"))
                 assert ex["ok"] is True and ex["status"] == "completed" and "peer-ok" in ex["stdout"]
+                if os.name != "nt":
+                    assert os.path.realpath(os.path.expanduser("~")) in ex["stdout"], f"Expected default cwd ~ in {ex['stdout']!r}"
             with urllib.request.urlopen(urllib.request.Request(base + f"/jobs/{ex['job_id']}", headers={"Authorization": f"Bearer {tok}"}), timeout=3) as r:
                 jb = json.loads(r.read().decode("utf-8"))
                 assert jb["job"]["job_id"] == ex["job_id"]

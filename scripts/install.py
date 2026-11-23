@@ -22,6 +22,7 @@ ALL_KNOWN_SKILLS = (
     "hw-node-profiler",
     "llm-node-finetune",
     "cluster-install-migrate",
+    "cluster-ops-bridge",
     "cluster-router",
     "hw-tuning-stability",
     "llm-inference-hillclimb",

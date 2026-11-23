@@ -27,7 +27,7 @@ import gpu_oc_verify  # noqa: E402
 import hardware_probe  # noqa: E402
 import peer_ctl  # noqa: E402
 
-SERVER_INFO = {"name": "cluster-hw-llm", "version": "1.2.0"}
+SERVER_INFO = {"name": "cluster-hw-llm", "version": "1.3.0"}
 
 TOOLS = [
     {
@@ -199,7 +199,7 @@ TOOLS = [
     },
     {
         "name": "openclaw_control",
-        "description": "Inspect, start, stop, cleanly transfer Active-Standby leadership (takeover without Telegram 409 Conflict), or send a Telegram reply via OpenClaw.",
+        "description": "Inspect, start, stop, cleanly transfer Active-Standby leadership (takeover without Telegram 409 Conflict), sync Telegram secrets, or send a Telegram reply via the Antigravity-first Telegram HA responder (or optional OpenClaw gateway).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -217,6 +217,8 @@ RESOURCES = [
     {"uri": "cluster://best-config", "name": "Node Best LLM Configs", "mimeType": "application/json", "description": "Verified tuned model configurations and benchmarks across cluster nodes."},
     {"uri": "cluster://benchmarks", "name": "Hardware & LLM Benchmarks", "mimeType": "text/markdown", "description": "Measured before/after LLM hill-climb, GPU UV/OC, and stability results."},
     {"uri": "cluster://architecture", "name": "Hardware Profiler & LLM Fine-Tuner Architecture", "mimeType": "text/markdown", "description": "Two-phase hardware profiling + per-node LLM fine-tuning design."},
+    {"uri": "cluster://peer-telegram", "name": "Bidirectional Peer Bridge & Telegram HA", "mimeType": "text/markdown", "description": "Cross-OS Tailscale :1236 / Drive queue bridge and Antigravity-first Telegram HA responder guide."},
+    {"uri": "cluster://agent-collaboration", "name": "Cluster Subagent Collaboration Guide", "mimeType": "text/markdown", "description": "Patterns for delegating work across Antigravity and local cluster/* agents."},
 ]
 
 
@@ -450,6 +452,8 @@ def read_resource(uri):
         "cluster://best-config": ("application/json", os.path.join(REPO_ROOT, "profiles", "best-config.json")),
         "cluster://benchmarks": ("text/markdown", os.path.join(REPO_ROOT, "docs", "BENCHMARKS.md")),
         "cluster://architecture": ("text/markdown", os.path.join(REPO_ROOT, "docs", "ARCHITECTURE.md")),
+        "cluster://peer-telegram": ("text/markdown", os.path.join(REPO_ROOT, "docs", "PEER_AND_OPENCLAW.md")),
+        "cluster://agent-collaboration": ("text/markdown", os.path.join(REPO_ROOT, "docs", "AGENT_COLLABORATION.md")),
     }
     if uri not in mapping:
         raise ValueError(f"Unknown resource URI {uri!r}")

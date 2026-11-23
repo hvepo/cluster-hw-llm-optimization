@@ -236,6 +236,18 @@ def setup_lmstudio_mcp(ctx, os_tag, dry_run=False, uninstall=False):
     inst.write_json_atomic(mcp_path, data, dry_run=dry_run)
 
 
+GLOBAL_CLI_SHIMS = (
+    ("cluster-peer", "tools/peer/peer_ctl.py"),
+    ("cluster-telegram", "tools/peer/openclaw_ctl.py"),
+    ("cluster-llm", "tools/cluster_ctl.py"),
+    ("cluster-gateway", "tools/gateway/gateway_ctl.py"),
+    ("cluster-chat", "tools/gateway/cluster_chat.py"),
+    ("cluster-hw", "tools/hw/hardware_probe.py"),
+    ("cluster-doctor", "scripts/doctor.py"),
+)
+SHIM_MARKER = "# managed-by: cluster-hw-llm-optimization"
+
+
 def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
     base = endpoint.rstrip("/")
     v1 = base + "/v1"
@@ -257,6 +269,8 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         agy_script = win_root.rstrip("\\") + r"\tools\gateway\agy_local_agent.py"
         ctl_script = win_root.rstrip("\\") + r"\tools\cluster_ctl.py"
         gw_ctl_script = win_root.rstrip("\\") + r"\tools\gateway\gateway_ctl.py"
+        peer_script = win_root.rstrip("\\") + r"\tools\peer\peer_ctl.py"
+        tg_script = win_root.rstrip("\\") + r"\tools\peer\openclaw_ctl.py"
         ps_body = (
             "# Opt-in Local Cluster helpers for PowerShell\n"
             f"$env:CLUSTER_API_BASE = '{base}'\n"
@@ -271,6 +285,8 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             "function cluster-chat { & " + f'"{win_cmd}" {pre_args} "{chat_script}" @args' + " }\n"
             "function cluster-agy { & " + f'"{win_cmd}" {pre_args} "{agy_script}" @args' + " }\n"
             "function cluster-preset { param([string]$Name='home-dual') & " + f'"{win_cmd}" {pre_args} "{ctl_script}" preset $Name' + " }\n"
+            "function cluster-peer { & " + f'"{win_cmd}" {pre_args} "{peer_script}" @args' + " }\n"
+            "function cluster-telegram { & " + f'"{win_cmd}" {pre_args} "{tg_script}" @args' + " }\n"
             "function cluster-claude {\n"
             "  param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest)\n"
             f"  $env:ANTHROPIC_BASE_URL = '{base}'\n"
@@ -288,13 +304,24 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         return
 
     target = os.path.join(cfg_dir, "env.sh")
+    bin_dir = os.path.join(ctx["home_local"], ".local", "bin")
     if uninstall:
         if os.path.isfile(target):
             print(f"[{os_tag}:env] remove {target}")
             if not dry_run:
                 os.remove(target)
+        for name, _ in GLOBAL_CLI_SHIMS:
+            shim_path = os.path.join(bin_dir, name)
+            if os.path.isfile(shim_path):
+                try:
+                    if SHIM_MARKER in open(shim_path, encoding="utf-8", errors="ignore").read():
+                        print(f"[{os_tag}:cli] remove {shim_path}")
+                        if not dry_run:
+                            os.remove(shim_path)
+                except OSError:
+                    pass
         return
-    posix_repo = ctx["repo_str"]
+    posix_repo = ctx["repo_str"].rstrip("/")
     py = ctx["mcp_command"]
     sh_body = (
         "# Opt-in Local Cluster helpers for bash/zsh (source ~/.config/cluster-llm/env.sh)\n"
@@ -310,6 +337,8 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         f'cluster-chat() {{ "{py}" "{posix_repo}/tools/gateway/cluster_chat.py" "$@"; }}\n'
         f'cluster-agy() {{ "{py}" "{posix_repo}/tools/gateway/agy_local_agent.py" "$@"; }}\n'
         f'cluster-preset() {{ "{py}" "{posix_repo}/tools/cluster_ctl.py" preset "${{1:-home-dual}}"; }}\n'
+        f'cluster-peer() {{ "{py}" "{posix_repo}/tools/peer/peer_ctl.py" "$@"; }}\n'
+        f'cluster-telegram() {{ "{py}" "{posix_repo}/tools/peer/openclaw_ctl.py" "$@"; }}\n'
         "cluster-claude() {\n"
         f'  ANTHROPIC_BASE_URL="{base}" ANTHROPIC_AUTH_TOKEN="local-cluster" \\\n'
         '  ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-cluster/code}" \\\n'
@@ -324,11 +353,18 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         '  aider --model "openai/${CLUSTER_CODE_MODEL:-cluster/code}" --weak-model "openai/cluster/fast-agent" "$@"\n'
         "}\n"
     )
-    print(f"[{os_tag}:env] write opt-in helpers -> {target}")
+    print(f"[{os_tag}:env] write opt-in helpers -> {target} and PATH shims -> {bin_dir}/cluster-*")
     if not dry_run:
         os.makedirs(cfg_dir, exist_ok=True)
         with open(target, "w", encoding="utf-8") as f:
             f.write(sh_body)
+        os.makedirs(bin_dir, exist_ok=True)
+        for name, rel_script in GLOBAL_CLI_SHIMS:
+            shim_path = os.path.join(bin_dir, name)
+            shim_body = f'#!/usr/bin/env sh\n{SHIM_MARKER}\nexec "{py}" "{posix_repo}/{rel_script}" "$@"\n'
+            with open(shim_path, "w", encoding="utf-8") as sf:
+                sf.write(shim_body)
+            os.chmod(shim_path, 0o755)
 
 
 def setup_codex(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
