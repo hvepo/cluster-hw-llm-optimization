@@ -96,15 +96,33 @@ def _node_current_bin():
     return os.path.join(_node_base_dir(), "current", "bin")
 
 
+def _openclaw_npm_fallback_prefix():
+    return os.path.join(os.path.expanduser("~"), ".local", "share", "openclaw-npm")
+
+
+def _ensure_secure_openclaw_dir(path, private=False):
+    os.makedirs(path, mode=0o700 if private else 0o755, exist_ok=True)
+    if os.name == "nt":
+        return
+    try:
+        if private:
+            os.chmod(path, 0o700)
+        else:
+            mode = os.stat(path).st_mode & 0o777
+            if mode & 0o022:
+                os.chmod(path, mode & ~0o022)
+    except OSError:
+        pass
+
+
 def find_linux_node_bin():
-    cands = [
-        os.path.join(_node_current_bin(), "node"),
-        "/usr/local/bin/node",
-        "/usr/bin/node",
-    ]
+    cands = [os.path.join(_node_current_bin(), "node")]
     found = shutil.which("node")
-    if found and not found.startswith("/mnt/"):
-        cands.insert(0, found)
+    if found and not found.startswith("/mnt/") and found not in cands:
+        cands.append(found)
+    for p in ("/usr/local/bin/node", "/usr/bin/node"):
+        if p not in cands:
+            cands.append(p)
     for c in cands:
         if c and os.path.isfile(c) and os.access(c, os.X_OK):
             return c
@@ -115,25 +133,58 @@ def find_openclaw_bin():
     cands = [
         os.path.join(os.path.expanduser("~"), ".local", "bin", "openclaw"),
         os.path.join(_node_current_bin(), "openclaw"),
-        "/usr/local/bin/openclaw",
-        "/usr/bin/openclaw",
+        os.path.join(_openclaw_npm_fallback_prefix(), "bin", "openclaw"),
     ]
     found = shutil.which("openclaw")
-    if found and not found.startswith("/mnt/"):
-        cands.insert(0, found)
+    if found and not found.startswith("/mnt/") and found not in cands:
+        cands.append(found)
+    for p in ("/usr/local/bin/openclaw", "/usr/bin/openclaw"):
+        if p not in cands:
+            cands.append(p)
     for c in cands:
         if c and os.path.isfile(c) and os.access(c, os.X_OK):
             return c
     return None
 
 
-def _node_env():
+def _node_env(node_bin=None):
     env = os.environ.copy()
-    parts = [os.path.join(os.path.expanduser("~"), ".local", "bin"), _node_current_bin()]
+    parts = [
+        os.path.join(os.path.expanduser("~"), ".local", "bin"),
+        os.path.dirname(node_bin) if node_bin else "",
+        _node_current_bin(),
+        os.path.join(_openclaw_npm_fallback_prefix(), "bin"),
+    ]
+    dedup = []
+    for p in parts:
+        if p and p not in dedup:
+            dedup.append(p)
     cur_path = env.get("PATH", "")
     # Place Linux Node ahead of Windows /mnt/c paths so npm/node never invoke Windows binaries
-    env["PATH"] = ":".join([p for p in parts if p] + ([cur_path] if cur_path else []))
+    env["PATH"] = ":".join(dedup + ([cur_path] if cur_path else []))
     return env
+
+
+def _is_writable_prefix(prefix):
+    if not prefix or not os.path.isdir(prefix) or not os.access(prefix, os.W_OK):
+        return False
+    for sub in (
+        os.path.join(prefix, "lib"),
+        os.path.join(prefix, "lib", "node_modules"),
+        os.path.join(prefix, "bin"),
+    ):
+        if os.path.exists(sub) and not os.access(sub, os.W_OK):
+            return False
+    return True
+
+
+def _resolve_npm_prefix(node_bin):
+    candidate = os.path.dirname(os.path.dirname(os.path.abspath(node_bin)))
+    if _is_writable_prefix(candidate):
+        return candidate
+    fallback = _openclaw_npm_fallback_prefix()
+    os.makedirs(fallback, exist_ok=True)
+    return fallback
 
 
 def _node_major_version(node_bin):
@@ -204,11 +255,15 @@ def install_runtime(force=False):
         finally:
             if os.path.exists(tmp_tar):
                 os.remove(tmp_tar)
-        node_bin = find_linux_node_bin()
+        node_bin = os.path.join(_node_current_bin(), "node")
 
+    env = _node_env(node_bin)
     npm_bin = os.path.join(os.path.dirname(node_bin), "npm")
-    prefix = os.path.dirname(os.path.dirname(node_bin))
-    env = _node_env()
+    if not (os.path.isfile(npm_bin) and os.access(npm_bin, os.X_OK)):
+        npm_bin = shutil.which("npm", path=env["PATH"])
+    if not npm_bin:
+        raise RuntimeError(f"npm binary not found alongside Node.js ({node_bin})")
+    prefix = _resolve_npm_prefix(node_bin)
     print(f"[openclaw] installing openclaw via {npm_bin} (prefix={prefix})")
     r = subprocess.run(
         [npm_bin, "install", "-g", "openclaw@latest", "--prefix", prefix],
@@ -236,7 +291,7 @@ def configure_openclaw(cfg=None, config_path=None):
     """Update openclaw.json to use Cluster Router Gateway (:1235) while preserving Telegram/auth secrets."""
     cfg = cfg or cluster_lib.load_cluster_config(REPO_ROOT)
     cpath = config_path or openclaw_config_path()
-    os.makedirs(os.path.dirname(cpath), exist_ok=True)
+    _ensure_secure_openclaw_dir(os.path.dirname(cpath), private=True)
 
     data = {}
     if os.path.isfile(cpath):
@@ -316,7 +371,7 @@ def configure_openclaw(cfg=None, config_path=None):
         json.dump(data, f, indent=2)
         f.write("\n")
 
-    os.makedirs(ws_dir, exist_ok=True)
+    _ensure_secure_openclaw_dir(ws_dir, private=False)
     ws_agents_md = os.path.join(ws_dir, "AGENTS.md")
     peer_ctl = os.path.join(REPO_ROOT, "tools", "peer", "peer_ctl.py")
     oc_ctl = os.path.join(REPO_ROOT, "tools", "peer", "openclaw_ctl.py")
@@ -429,12 +484,39 @@ def _sentinel_log_file():
     return os.path.join(state_dir(), "openclaw-sentinel.log")
 
 
+def _reap_children():
+    if os.name == "nt" or not hasattr(os, "waitpid"):
+        return
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+            if pid <= 0:
+                break
+        except ChildProcessError:
+            break
+        except OSError:
+            break
+
+
+def _is_proc_zombie(pid):
+    try:
+        with open(f"/proc/{int(pid)}/status", "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if line.startswith("State:"):
+                    val = line.split(":", 1)[1].strip()
+                    return val.startswith("Z")
+    except OSError:
+        pass
+    return False
+
+
 def _pid_alive(pid):
+    _reap_children()
     try:
         os.kill(int(pid), 0)
-        return True
     except Exception:
         return False
+    return not _is_proc_zombie(pid)
 
 
 def _read_pid(path):
@@ -538,6 +620,7 @@ def cmd_start(cfg, force=False, manual_leader=None):
     if not ok:
         return {"ok": False, "error": f"Lease held by {lease.get('holder_node')} until {lease.get('expires_at')}", "lease": lease}
 
+    _ensure_secure_openclaw_dir(openclaw_home(), private=True)
     sweep_orphan_openclaw()
     log_path = _oc_log_file()
     with open(log_path, "a", encoding="utf-8") as log_f:
@@ -553,7 +636,7 @@ def cmd_start(cfg, force=False, manual_leader=None):
         f.write(str(proc.pid))
 
     store.acquire_or_renew(local_node, pid=proc.pid, ttl_s=ttl_s, force=True, manual_leader=manual_leader)
-    deadline = time.time() + 10.0
+    deadline = time.time() + 20.0
     while time.time() < deadline:
         if proc.poll() is not None:
             return {"ok": False, "error": f"openclaw exited early ({proc.returncode}); check {log_path}"}
@@ -679,6 +762,7 @@ def run_sentinel_loop(cfg, once=False):
         f.write(str(os.getpid()))
 
     while True:
+        _reap_children()
         now = time.time()
         lease = store.read_lease()
         manual = (lease or {}).get("manual_leader")

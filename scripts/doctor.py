@@ -877,7 +877,11 @@ def check_peer_and_openclaw():
             ok_takeover, l3 = store.acquire_or_renew("torre", pid=333, ttl_s=30, force=True, manual_leader="torre", now=1040.0)
             assert ok_takeover is True and l3["holder_node"] == "torre" and l3["epoch"] == 3
 
-            oc_cfg_p = os.path.join(tmp, "openclaw.json")
+            oc_home = os.path.join(tmp, "oc_home")
+            os.makedirs(oc_home, exist_ok=True)
+            if os.name != "nt":
+                os.chmod(oc_home, 0o775)
+            oc_cfg_p = os.path.join(oc_home, "openclaw.json")
             with open(oc_cfg_p, "w", encoding="utf-8") as f:
                 json.dump({
                     "models": {"providers": {"cluster-local": {"baseUrl": "http://127.0.0.1:1238/v1"}}},
@@ -891,6 +895,35 @@ def check_peer_and_openclaw():
             assert migrated["agents"]["defaults"]["model"]["primary"] == "cluster-local/cluster/code"
             assert "google/gemini-3.8-flash" in migrated["agents"]["defaults"]["model"]["fallbacks"]
             assert os.path.isfile(os.path.join(tmp, "ws", "AGENTS.md"))
+            if os.name != "nt":
+                assert (os.stat(oc_home).st_mode & 0o022) == 0, "configure_openclaw did not strip group/world write bits"
+
+            # 4b. OpenClaw Node v24 preference, writable npm prefix fallback, and zombie/PID checks
+            fake_node_prefix = os.path.join(tmp, "fake_node_prefix")
+            os.makedirs(os.path.join(fake_node_prefix, "bin"), exist_ok=True)
+            fake_node_bin = os.path.join(fake_node_prefix, "bin", "node")
+            open(fake_node_bin, "w", encoding="utf-8").close()
+            os.chmod(fake_node_bin, 0o755)
+            assert openclaw_ctl._resolve_npm_prefix(fake_node_bin) == fake_node_prefix
+            if os.name != "nt" and hasattr(os, "geteuid") and os.geteuid() != 0 and os.path.exists("/usr/bin/node"):
+                fb_prefix = openclaw_ctl._resolve_npm_prefix("/usr/bin/node")
+                assert fb_prefix != "/usr" and os.access(fb_prefix, os.W_OK)
+
+            managed_root = os.path.join(tmp, "managed_nodejs")
+            managed_bin_dir = os.path.join(managed_root, "current", "bin")
+            os.makedirs(managed_bin_dir, exist_ok=True)
+            managed_node = os.path.join(managed_bin_dir, "node")
+            open(managed_node, "w", encoding="utf-8").close()
+            os.chmod(managed_node, 0o755)
+            orig_node_base_dir = openclaw_ctl._node_base_dir
+            try:
+                openclaw_ctl._node_base_dir = lambda: managed_root
+                assert openclaw_ctl.find_linux_node_bin() == managed_node
+            finally:
+                openclaw_ctl._node_base_dir = orig_node_base_dir
+
+            assert openclaw_ctl._pid_alive(os.getpid()) is True
+            assert openclaw_ctl._is_proc_zombie(os.getpid()) is False
 
             # 5. Stdio MCP roundtrip for peer_status & openclaw_control(status)
             mcp_env = dict(os.environ)
