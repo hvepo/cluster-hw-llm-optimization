@@ -593,18 +593,57 @@ def _port_open(host, port, timeout=1.0):
         return False
 
 
+def _ancestor_pids(start_pid=None):
+    ancestors = set()
+    cur = int(start_pid or os.getpid())
+    for _ in range(16):
+        if cur <= 1 or cur in ancestors:
+            break
+        ancestors.add(cur)
+        try:
+            st = open(f"/proc/{cur}/stat", "r", encoding="utf-8", errors="ignore").read()
+            rparen = st.rfind(")")
+            if rparen == -1:
+                break
+            cur = int(st[rparen + 2 :].split()[1])
+        except Exception:
+            break
+    return ancestors
+
+
+def _is_target_responder_argv(parts):
+    if not parts:
+        return False
+    exe = os.path.basename(parts[0]).lower()
+    if exe in ("git", "bash", "sh", "zsh", "dash", "grep", "rg", "awk", "sed"):
+        return False
+    base_args = [os.path.basename(p).lower() for p in parts]
+    if "openclaw_ctl.py" in base_args or "openclaw-sentinel.py" in base_args:
+        return False
+    if "openclaw-gateway" in base_args:
+        return True
+    if "openclaw" in base_args and "gateway" in base_args and "run" in base_args:
+        return True
+    if exe.startswith("python") and "telegram_agy_daemon.py" in base_args[1:]:
+        return True
+    return False
+
+
 def sweep_orphan_openclaw(keep_pid=None):
-    """Terminate stray `openclaw gateway` processes on Linux/WSL so Telegram never hits 409 Conflict."""
+    """Terminate stray `openclaw gateway run` / `telegram_agy_daemon.py` processes on Linux/WSL."""
     proc_root = Path("/proc")
     if not proc_root.exists():
         return []
     my_uid = os.getuid()
+    protected = _ancestor_pids(os.getpid())
+    if keep_pid:
+        protected.add(int(keep_pid))
     killed = []
     for entry in proc_root.iterdir():
         if not entry.name.isdigit():
             continue
         pid = int(entry.name)
-        if pid in (os.getpid(), keep_pid):
+        if pid in protected:
             continue
         try:
             if entry.stat().st_uid != my_uid:
@@ -612,10 +651,8 @@ def sweep_orphan_openclaw(keep_pid=None):
             raw = (entry / "cmdline").read_bytes()
             if not raw:
                 continue
-            cmd = " ".join(p.decode("utf-8", "ignore") for p in raw.split(b"\x00") if p).lower()
-            if "openclaw_ctl.py" in cmd or "openclaw-sentinel" in cmd:
-                continue
-            if "openclaw-gateway" in cmd or ("openclaw" in cmd and "gateway" in cmd) or "telegram_agy_daemon.py" in cmd:
+            parts = [p.decode("utf-8", "ignore") for p in raw.split(b"\x00") if p]
+            if _is_target_responder_argv(parts):
                 os.kill(pid, signal.SIGTERM)
                 killed.append(pid)
         except Exception:

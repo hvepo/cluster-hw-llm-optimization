@@ -965,6 +965,11 @@ def check_peer_and_openclaw():
 
             assert openclaw_ctl._pid_alive(os.getpid()) is True
             assert openclaw_ctl._is_proc_zombie(os.getpid()) is False
+            assert os.getpid() in openclaw_ctl._ancestor_pids()
+            assert openclaw_ctl._is_target_responder_argv(["git", "add", "tools/peer/telegram_agy_daemon.py"]) is False
+            assert openclaw_ctl._is_target_responder_argv(["bash", "-c", "git add tools/peer/openclaw_ctl.py tools/gateway/cluster_gateway.py"]) is False
+            assert openclaw_ctl._is_target_responder_argv(["/usr/bin/python3", "/path/to/telegram_agy_daemon.py", "--repo-root", "."]) is True
+            assert openclaw_ctl._is_target_responder_argv(["/usr/bin/node", "/path/to/openclaw", "gateway", "run"]) is True
 
             # 4c. OpenClaw Node v24 wrapper + authenticated POST /openclaw/sync-secrets
             wrap_path = openclaw_ctl.write_openclaw_wrapper(
