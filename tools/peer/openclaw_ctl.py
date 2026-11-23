@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import platform
+import shlex
 import shutil
 import signal
 import socket
@@ -195,6 +196,42 @@ def _node_major_version(node_bin):
         return 0
 
 
+def _find_real_openclaw_entrypoint(node_bin=None):
+    cands = []
+    if node_bin:
+        cands.append(os.path.join(os.path.dirname(node_bin), "openclaw"))
+    cands.extend([
+        os.path.join(_node_current_bin(), "openclaw"),
+        os.path.join(_openclaw_npm_fallback_prefix(), "bin", "openclaw"),
+        "/usr/local/bin/openclaw",
+        "/usr/bin/openclaw",
+    ])
+    for c in cands:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def write_openclaw_wrapper(node_bin, installed_oc, wrapper_path=None):
+    """Write a POSIX wrapper so `openclaw` always runs under Node v24+ regardless of shell PATH."""
+    target = wrapper_path or os.path.join(os.path.expanduser("~"), ".local", "bin", "openclaw")
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    if os.path.lexists(target):
+        os.unlink(target)
+    node_abs = os.path.abspath(node_bin)
+    node_dir = os.path.dirname(node_abs)
+    oc_abs = os.path.abspath(installed_oc)
+    script = (
+        "#!/usr/bin/env sh\n"
+        f"export PATH={shlex.quote(node_dir)}:$PATH\n"
+        f"exec {shlex.quote(node_abs)} {shlex.quote(oc_abs)} \"$@\"\n"
+    )
+    with open(target, "w", encoding="utf-8") as f:
+        f.write(script)
+    os.chmod(target, 0o755)
+    return target
+
+
 def install_runtime(force=False):
     """Install user-space Linux Node.js v24 LTS + openclaw npm package in WSL/Linux (no sudo)."""
     if cluster_lib.detect_platform() == "windows":
@@ -202,9 +239,10 @@ def install_runtime(force=False):
 
     node_bin = find_linux_node_bin()
     node_ok = bool(node_bin and _node_major_version(node_bin) >= 24)
-    oc_bin = find_openclaw_bin()
-    if node_ok and oc_bin and not force:
-        return {"ok": True, "already_installed": True, "node": node_bin, "openclaw": oc_bin}
+    real_oc = _find_real_openclaw_entrypoint(node_bin)
+    if node_ok and real_oc and not force:
+        wrapper = write_openclaw_wrapper(node_bin, real_oc)
+        return {"ok": True, "already_installed": True, "node": node_bin, "openclaw": wrapper}
 
     arch = platform.machine().lower()
     node_arch = "arm64" if arch in ("aarch64", "arm64") else "x64"
@@ -277,14 +315,9 @@ def install_runtime(force=False):
         raise RuntimeError(f"npm install -g openclaw failed:\n{r.stderr or r.stdout}")
 
     installed_oc = os.path.join(prefix, "bin", "openclaw")
-    local_bin_dir = os.path.join(os.path.expanduser("~"), ".local", "bin")
-    os.makedirs(local_bin_dir, exist_ok=True)
-    link_path = os.path.join(local_bin_dir, "openclaw")
-    if os.path.islink(link_path) or os.path.exists(link_path):
-        os.unlink(link_path)
-    os.symlink(installed_oc, link_path)
+    wrapper = write_openclaw_wrapper(node_bin, installed_oc)
 
-    return {"ok": True, "already_installed": False, "node": node_bin, "openclaw": link_path}
+    return {"ok": True, "already_installed": False, "node": node_bin, "openclaw": wrapper}
 
 
 def configure_openclaw(cfg=None, config_path=None):
@@ -813,6 +846,101 @@ def start_sentinel_daemon(cfg):
     return {"ok": True, "pid": proc.pid, "log": log_path}
 
 
+def extract_openclaw_secrets(config_path=None):
+    """Extract Telegram, provider, and gateway auth sections for peer-to-peer sync over Tailscale."""
+    cpath = config_path or openclaw_config_path()
+    if not os.path.isfile(cpath):
+        raise FileNotFoundError(f"OpenClaw config not found: {cpath}")
+    data = json.load(open(cpath, encoding="utf-8"))
+    bundle = {}
+    tg = (data.get("channels") or {}).get("telegram")
+    if isinstance(tg, dict) and tg.get("botToken"):
+        bundle["telegram"] = tg
+    google_prov = ((data.get("models") or {}).get("providers") or {}).get("google")
+    if isinstance(google_prov, dict) and google_prov:
+        bundle["google_provider"] = google_prov
+    gw_auth = (data.get("gateway") or {}).get("auth")
+    if gw_auth:
+        bundle["gateway_auth"] = gw_auth
+    if data.get("auth"):
+        bundle["auth"] = data["auth"]
+    media = (data.get("tools") or {}).get("media")
+    if isinstance(media, dict) and media:
+        bundle["tools_media"] = media
+    return bundle
+
+
+def merge_openclaw_secrets(secrets_bundle, config_path=None):
+    """Merge synced secret sections into local openclaw.json without printing or echoing secret values."""
+    if not isinstance(secrets_bundle, dict) or not secrets_bundle:
+        return {"ok": False, "error": "Empty secrets bundle"}
+    cpath = config_path or openclaw_config_path()
+    _ensure_secure_openclaw_dir(os.path.dirname(cpath), private=True)
+    data = {}
+    if os.path.isfile(cpath):
+        data = json.load(open(cpath, encoding="utf-8"))
+        bak = f"{cpath}.{time.strftime('%Y%m%d-%H%M%S')}.bak"
+        shutil.copy2(cpath, bak)
+
+    synced = []
+    if isinstance(secrets_bundle.get("telegram"), dict):
+        data.setdefault("channels", {})["telegram"] = secrets_bundle["telegram"]
+        synced.append("channels.telegram")
+    if isinstance(secrets_bundle.get("google_provider"), dict):
+        data.setdefault("models", {}).setdefault("providers", {})["google"] = secrets_bundle["google_provider"]
+        synced.append("models.providers.google")
+    if secrets_bundle.get("gateway_auth") is not None:
+        data.setdefault("gateway", {})["auth"] = secrets_bundle["gateway_auth"]
+        synced.append("gateway.auth")
+    if secrets_bundle.get("auth") is not None:
+        data["auth"] = secrets_bundle["auth"]
+        synced.append("auth")
+    if isinstance(secrets_bundle.get("tools_media"), dict):
+        data.setdefault("tools", {})["media"] = secrets_bundle["tools_media"]
+        synced.append("tools.media")
+
+    with open(cpath, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    try:
+        os.chmod(cpath, 0o600)
+    except OSError:
+        pass
+
+    tg = (data.get("channels") or {}).get("telegram") or {}
+    return {
+        "ok": True,
+        "config_path": cpath,
+        "telegram_configured": bool(tg.get("enabled") and tg.get("botToken")),
+        "synced_keys": synced,
+    }
+
+
+def cmd_sync_secrets(cfg, target_node):
+    """Push OpenClaw Telegram/auth secrets to a peer node over authenticated Tailscale HTTP (:1236)."""
+    local_node = cfg.get("local_node") or "torre"
+    if not target_node or target_node == local_node:
+        return {"ok": False, "error": f"target_node must be a remote sibling node (got {target_node!r})"}
+    bundle = extract_openclaw_secrets()
+    if not bundle:
+        return {"ok": False, "error": "No OpenClaw secrets found to sync"}
+    token = resolve_peer_token(cfg)
+    if not token:
+        return {"ok": False, "error": "No peer_token configured; run peer_ctl.py init-token first"}
+    nd = (cfg.get("nodes") or {}).get(target_node) or {}
+    purl = (nd.get("peer_url") or "").strip().rstrip("/")
+    if not purl or "<" in purl:
+        return {"ok": False, "error": f"No peer_url configured for {target_node!r}"}
+    req = urllib.request.Request(
+        purl + "/openclaw/sync-secrets",
+        data=json.dumps({"secrets": bundle}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
 def stop_sentinel_daemon():
     pid = _read_pid(_sentinel_pid_file())
     if pid:
@@ -846,6 +974,8 @@ def main(argv=None):
     pt = sub.add_parser("telegram-reply")
     pt.add_argument("--message", required=True)
     pt.add_argument("--chat-id", default=None)
+    psy = sub.add_parser("sync-secrets")
+    psy.add_argument("--to", required=True, help="Target sibling node (e.g. portatil or torre)")
 
     args = ap.parse_args(argv)
     cfg = cluster_lib.load_cluster_config(REPO_ROOT)
@@ -875,6 +1005,8 @@ def main(argv=None):
         res = stop_sentinel_daemon()
     elif args.cmd == "telegram-reply":
         res = send_telegram_reply(args.message, chat_id=args.chat_id)
+    elif args.cmd == "sync-secrets":
+        res = cmd_sync_secrets(cfg, target_node=args.to)
     else:
         return 1
 

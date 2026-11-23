@@ -462,6 +462,11 @@ def make_handler(runtime: PeerRuntime):
                 self._send_json(200, res)
                 return
 
+            if path == "/openclaw/sync-secrets":
+                res = openclaw_ctl.merge_openclaw_secrets(body.get("secrets") or {})
+                self._send_json(200, res)
+                return
+
             self._send_json(404, {"ok": False, "error": f"Unknown path {path}"})
 
     return PeerHandler

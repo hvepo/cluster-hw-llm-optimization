@@ -203,7 +203,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["status", "start", "stop", "takeover", "telegram_reply"]},
+                "action": {"type": "string", "enum": ["status", "start", "stop", "takeover", "telegram_reply", "sync_secrets"]},
                 "node": {"type": "string", "description": "Optional node to run the action on (defaults to local_node)."},
                 "message": {"type": "string", "description": "Message text when action='telegram_reply'."},
             },

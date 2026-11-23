@@ -294,6 +294,10 @@ def get_job_status(cfg, job_id, target_node=None):
 def remote_openclaw_control(cfg, action, target_node=None, message=None):
     local_node = cfg.get("local_node") or "torre"
     target = (target_node or local_node).strip()
+    if action == "sync_secrets":
+        if target == local_node:
+            raise ValueError("Specify target sibling node ('portatil' or 'torre') when action='sync_secrets'")
+        return openclaw_ctl.cmd_sync_secrets(cfg, target)
     if target == local_node:
         if action == "status":
             return openclaw_ctl.cmd_status(cfg)

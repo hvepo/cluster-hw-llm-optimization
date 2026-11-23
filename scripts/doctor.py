@@ -925,6 +925,59 @@ def check_peer_and_openclaw():
             assert openclaw_ctl._pid_alive(os.getpid()) is True
             assert openclaw_ctl._is_proc_zombie(os.getpid()) is False
 
+            # 4c. OpenClaw Node v24 wrapper + authenticated POST /openclaw/sync-secrets
+            wrap_path = openclaw_ctl.write_openclaw_wrapper(
+                managed_node,
+                os.path.join(managed_bin_dir, "openclaw"),
+                wrapper_path=os.path.join(tmp, "bin", "openclaw"),
+            )
+            wrap_txt = open(wrap_path, encoding="utf-8").read()
+            assert wrap_txt.startswith("#!/usr/bin/env sh\n")
+            assert managed_bin_dir in wrap_txt and f"exec {managed_node}" in wrap_txt
+            if os.name != "nt":
+                assert os.access(wrap_path, os.X_OK)
+
+            oc_sync_dir = os.path.join(tmp, "oc_sync_target")
+            os.makedirs(oc_sync_dir, exist_ok=True)
+            with open(os.path.join(oc_sync_dir, "openclaw.json"), "w", encoding="utf-8") as f:
+                json.dump({"models": {"providers": {"cluster-local": {"baseUrl": "http://127.0.0.1:1235/v1"}}}}, f)
+            old_oc_home = os.environ.get("OPENCLAW_HOME")
+            os.environ["OPENCLAW_HOME"] = oc_sync_dir
+            try:
+                try:
+                    urllib.request.urlopen(
+                        urllib.request.Request(
+                            base + "/openclaw/sync-secrets",
+                            data=json.dumps({"secrets": {"telegram": {"enabled": True, "botToken": "secret_tok", "allowFrom": ["42"]}}}).encode("utf-8"),
+                            headers={"Content-Type": "application/json"},
+                            method="POST",
+                        ),
+                        timeout=3,
+                    )
+                    raise AssertionError("Expected 401 on unauthorized /openclaw/sync-secrets")
+                except urllib.error.HTTPError as e:
+                    assert e.code == 401
+
+                sync_req = urllib.request.Request(
+                    base + "/openclaw/sync-secrets",
+                    data=json.dumps({"secrets": {"telegram": {"enabled": True, "botToken": "secret_tok", "allowFrom": ["42"]}}}).encode("utf-8"),
+                    headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(sync_req, timeout=3) as r:
+                    raw_resp = r.read().decode("utf-8")
+                    assert "secret_tok" not in raw_resp, "Secret leaked in sync-secrets HTTP response!"
+                    sync_res = json.loads(raw_resp)
+                    assert sync_res["ok"] is True and sync_res["telegram_configured"] is True
+                merged_oc = json.load(open(os.path.join(oc_sync_dir, "openclaw.json"), encoding="utf-8"))
+                assert merged_oc["channels"]["telegram"]["botToken"] == "secret_tok"
+                assert merged_oc["models"]["providers"]["cluster-local"]["baseUrl"] == "http://127.0.0.1:1235/v1"
+            finally:
+                if old_oc_home is None:
+                    os.environ.pop("OPENCLAW_HOME", None)
+                else:
+                    os.environ["OPENCLAW_HOME"] = old_oc_home
+
             # 5. Stdio MCP roundtrip for peer_status & openclaw_control(status)
             mcp_env = dict(os.environ)
             mcp_env["CLUSTER_PEER_TOKEN"] = tok

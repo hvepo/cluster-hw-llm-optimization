@@ -41,7 +41,11 @@ flowchart TD
    - `target_os="wsl"` executes `~/.gemini/bin/agy -p ... --mode auto --dangerously-skip-permissions --output-format json` (or `bash -lc`).
    - `target_os="windows"` runs `powershell.exe -NoProfile -Command ...` with `stdin=subprocess.DEVNULL` (for `exec`) or routes an `agy` task targeting Windows PowerShell.
 3. **OpenClaw in WSL Only + Active-Standby HA:**
-   - OpenClaw runs in **WSL** on both machines (accessible from Windows browsers via `localhost:18789` thanks to mirrored networking) and is pre-configured to use `http://127.0.0.1:1235/v1` (`cluster/code`, `cluster/fast-agent`, `cluster/reasoning`, `cluster/vision-heavy`) while keeping your existing Telegram `botToken` and `allowFrom` allowlist intact.
+   - OpenClaw runs in **WSL** on both machines (accessible from Windows browsers via `localhost:18789` thanks to mirrored networking), wrapped at `~/.local/bin/openclaw` to pin Node `v24+` regardless of shell `$PATH`, and is pre-configured to use `http://127.0.0.1:1235/v1` (`cluster/code`, `cluster/fast-agent`, `cluster/reasoning`, `cluster/vision-heavy`) while keeping your existing Telegram `botToken` and `allowFrom` allowlist intact.
+   - To copy Telegram/provider/gateway secrets directly from `torre` to `portatil` over authenticated Tailscale `:1236` (keeping them out of Git and Google Drive), run:
+     ```bash
+     python3 tools/peer/openclaw_ctl.py sync-secrets --to portatil
+     ```
    - Only **one** machine holds `<sync_dir>/openclaw-ha/leader.json` and runs `openclaw gateway run` at any time:
      - **`torre`** is primary when online.
      - **`portatil`** promotes itself automatically if `torre` fails 3 consecutive probes and the 30s lease expires.
