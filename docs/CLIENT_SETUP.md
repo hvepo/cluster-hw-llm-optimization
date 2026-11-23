@@ -110,7 +110,14 @@ Antigravity's native UI model dropdown only lists Google-managed cloud models (G
 
 To use your local `torre` + `portatil` `cluster/*` pool with Antigravity on either machine:
 
-1. **Inside Antigravity App / IDE / CLI via MCP (`cluster-hw-llm`):**
+1. **Bundled Plugin Agents in Antigravity's Agents Menu (`cluster-coder`, `cluster-fast-agent`, `cluster-reasoning`, `cluster-vision`):**
+   - Packaged under `plugins/cluster-hw-llm-optimization/agents/` and deployed globally to `~/.gemini/config/plugins/cluster-hw-llm-optimization` (both Windows and WSL).
+   - Each agent routes strictly through virtual `cluster/*` aliases via `cluster_chat` (with `tools/gateway/cluster_chat.py` CLI fallback), so they work identically on `torre` and `portatil` (dual-GPU over LM Link at home, or automatic local Arc 140V failover when away).
+   - See [AGENT_COLLABORATION.md](AGENT_COLLABORATION.md) for the full architecture and collaboration guide.
+   - Sync both Windows and WSL plugins anytime on either machine with:
+     - WSL / Linux: `bash install.sh --os auto --targets agy --scope user`
+     - Windows PowerShell: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Os auto -Targets agy -Scope user`
+2. **Inside Antigravity App / IDE / CLI via MCP (`cluster-hw-llm`):**
    - `cluster_models`: Queries `http://127.0.0.1:1235/cluster/status` to inspect online nodes, loaded VRAM models, and every `cluster/*` alias route.
    - `cluster_chat`: Delegates coding, fast drafts (`cluster/fast-agent`), vision (`cluster/vision-heavy`), reasoning (`cluster/reasoning`), or math prompts directly to `http://127.0.0.1:1235/api/v1/chat`, with stateful `previous_response_id` chaining pinned to whichever node holds the session.
    - Works seamlessly whether you are on **`torre`** or on **`portatil`** (at home over LM Link using both GPUs, or away from home automatically failing over to `portatil` local models).

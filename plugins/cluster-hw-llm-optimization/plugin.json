@@ -6,7 +6,6 @@
   "author": "cluster-hw-llm-optimization contributors",
   "suggestedPrompts": [
     "Profile this node's hardware, BIOS, drivers, power plan, and Event Log health with hw_node_profile",
-    "Verify my GPU undervolt/VRAM OC and CPU Curve Optimizer stability against prefill and WHEA/nvlddmkm errors",
     "Compute theoretical ceilings and fine-tune LLM serving parameters for a model on this cluster node",
     "List live cluster/* aliases with cluster_models and delegate a coding or reasoning prompt to your local cluster with cluster_chat"
   ]

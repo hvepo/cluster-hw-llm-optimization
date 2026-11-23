@@ -54,7 +54,7 @@ Full methodology and per-model tables in [docs/BENCHMARKS.md](docs/BENCHMARKS.md
 | **5-Protocol Cluster Gateway & SDK Helper** | `tools/gateway/{cluster_gateway.py,gateway_ctl.py,cluster_chat.py,agy_local_agent.py}` | Exposes unified LM Link pool (`127.0.0.1:1235`) across LM Studio `/api/v1/*`, OpenAI `/v1/*`, Responses, and Anthropic `/v1/messages` with `cluster/*` failover, anti-thrash routing, and Antigravity SDK runner |
 | **Client Provisioner & Ollama Audit** | `scripts/{setup_clients.py,cleanup_ollama.py}` (`--serving`) | Configures OpenCode, VS Code Copilot BYOK, Continue, LM Studio `mcp.json`, Windows/WSL shell helpers (`cluster-agy`), and detects/removes leftover Windows/WSL `:11434` Ollama daemons |
 | **Stdio MCP Server (9 tools, 3 resources)** | `mcp/cluster_mcp_server.py` (`cluster-hw-llm`) | `hw_node_profile` · `hw_gpu_telemetry` · `hw_event_log_check` · `llm_compute_ceiling` · `node_llm_status` · `node_best_configs` · `node_llm_control` · `cluster_models` · `cluster_chat` |
-| **Antigravity Plugin & Hooks** | `plugins/cluster-hw-llm-optimization/` | `PreToolUse` default-config & LM Link safety guard + `SessionStart` node context |
+| **Antigravity Plugin, Agents & Hooks** | `plugins/cluster-hw-llm-optimization/` | 4 local-cluster delegator agents (`cluster-coder`, `cluster-fast-agent`, `cluster-reasoning`, `cluster-vision`), `PreToolUse` default-config & LM Link safety guard + `SessionStart` node context |
 | **Universal Rules** | `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md` | Cross-agent hardware & LLM benchmarking guardrails |
 
 ---
@@ -82,7 +82,7 @@ python3 scripts/doctor.py --all --check-privacy
 python3 scripts/doctor.py --all --check-privacy --live
 ```
 
-See [docs/CLIENT_SETUP.md](docs/CLIENT_SETUP.md), [docs/MIGRATION.md](docs/MIGRATION.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and [PROMPT.md](PROMPT.md) for using the unified `cluster/*` pool across every IDE/agent and copy-ready tuning prompts.
+See [docs/AGENT_COLLABORATION.md](docs/AGENT_COLLABORATION.md), [docs/CLIENT_SETUP.md](docs/CLIENT_SETUP.md), [docs/MIGRATION.md](docs/MIGRATION.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and [PROMPT.md](PROMPT.md) for how the local agents collaborate, using the unified `cluster/*` pool across every IDE/agent, and copy-ready tuning prompts.
 
 ## License
 MIT ([LICENSE](LICENSE)) — retains upstream MIT notice for `sybil-solutions/inference-optimisation-skill`.

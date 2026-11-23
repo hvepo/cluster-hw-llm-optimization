@@ -21,6 +21,7 @@ import tempfile
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 EXPECTED_SKILLS = {"hw-node-profiler", "llm-node-finetune", "cluster-install-migrate"}
+EXPECTED_AGENTS = {"cluster-coder.md", "cluster-fast-agent.md", "cluster-reasoning.md", "cluster-vision.md"}
 EXPECTED_MCP_TOOLS = {
     "hw_node_profile",
     "hw_gpu_telemetry",
@@ -101,10 +102,24 @@ def check_json_and_plugin_schema(files):
     pj = json.load(open(pj_path, encoding="utf-8"))
     extra = set(pj.keys()) - allowed_plugin_keys
     assert not extra, f"Disallowed top-level keys in plugin.json: {extra}"
+    assert len(pj.get("suggestedPrompts", [])) <= 3, "plugin.json suggestedPrompts must have at most 3 entries"
     assert os.path.isfile(os.path.join(REPO_ROOT, "plugins", "cluster-hw-llm-optimization", "hooks.json")), "Missing hooks.json at plugin root"
     rules_path = os.path.join(REPO_ROOT, "plugins", "cluster-hw-llm-optimization", "rules", "AGENTS.md")
     with open(rules_path, encoding="utf-8") as f:
         assert not f.read().lstrip().startswith("---"), "Plugin rules/AGENTS.md must not have YAML frontmatter"
+
+    agents_dir = os.path.join(REPO_ROOT, "plugins", "cluster-hw-llm-optimization", "agents")
+    assert os.path.isdir(agents_dir), f"Missing plugin agents directory: {agents_dir}"
+    found_agents = {fn for fn in os.listdir(agents_dir) if fn.endswith(".md") and os.path.isfile(os.path.join(agents_dir, fn))}
+    assert found_agents == EXPECTED_AGENTS, f"Agent mismatch in {agents_dir}: expected {EXPECTED_AGENTS}, got {found_agents}"
+    for af in sorted(EXPECTED_AGENTS):
+        with open(os.path.join(agents_dir, af), encoding="utf-8") as f:
+            txt = f.read()
+        assert txt.startswith("---\n"), f"Agent {af} must start with YAML frontmatter"
+        parts = txt.split("---\n", 2)
+        assert len(parts) >= 3, f"Agent {af} missing closing YAML frontmatter delimiter"
+        fm = parts[1]
+        assert "name:" in fm and "description:" in fm, f"Agent {af} frontmatter must declare name and description"
 
     for sroot in (
         os.path.join(REPO_ROOT, "skills"),
@@ -274,6 +289,7 @@ def check_install_matrix():
             assert os.path.isfile(os.path.join(agy_dir, "hooks.json"))
             assert os.path.isfile(os.path.join(agy_dir, "repo_root.txt"))
             assert set(os.listdir(os.path.join(agy_dir, "skills"))) == EXPECTED_SKILLS
+            assert set(os.listdir(os.path.join(agy_dir, "agents"))) == EXPECTED_AGENTS
             assert set(os.listdir(os.path.join(home_root, ".copilot", "skills"))) == EXPECTED_SKILLS
             assert set(os.listdir(os.path.join(home_root, ".config", "opencode", "skills"))) == EXPECTED_SKILLS
             oc_data = json.load(open(os.path.join(home_root, ".config", "opencode", "opencode.json"), encoding="utf-8"))
