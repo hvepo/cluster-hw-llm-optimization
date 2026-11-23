@@ -12,6 +12,7 @@ itself chooses to delegate a task to cluster tools/subagents.
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -310,11 +311,12 @@ def parse_agy_output(stdout, stderr="", returncode=0):
     if "authentication required" in combined_err.lower() or "authentication failed" in combined_err.lower():
         return {
             "ok": False,
+            "auth_required": True,
             "text": "",
             "conversation_id": None,
             "error": (
                 "Antigravity CLI needs a one-time OAuth login on this node. "
-                "Run '~/.gemini/bin/agy -p \"hi\"' in WSL on this machine and complete the login URL."
+                "Send /login here on Telegram (or run '~/.gemini/bin/agy -p \"hi\"' in WSL) and reply with the authorization code."
             ),
         }
 
@@ -345,30 +347,46 @@ def _run_agy_subprocess(cmd, work_dir, timeout_s, cancel_event=None):
         cwd=work_dir,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
+        bufsize=1,
         start_new_session=(os.name != "nt"),
     )
-    deadline = time.monotonic() + float(timeout_s)
     out_chunks = []
-    err_chunks = []
+    auth_abort = threading.Event()
+
+    def _reader():
+        try:
+            for ln in proc.stdout:
+                out_chunks.append(ln)
+                low = ln.lower()
+                if "authentication required" in low or "waiting for authentication" in low or _OAUTH_URL_RE.search(ln):
+                    auth_abort.set()
+        except Exception:
+            pass
+
+    rt = threading.Thread(target=_reader, daemon=True, name="agy-subproc-reader")
+    rt.start()
+
+    deadline = time.monotonic() + float(timeout_s)
     while True:
+        if auth_abort.is_set():
+            _terminate_proc(proc)
+            rt.join(timeout=1.0)
+            return 1, "".join(out_chunks), "Authentication required", None
         if cancel_event is not None and cancel_event.is_set():
             _terminate_proc(proc)
+            rt.join(timeout=1.0)
             return None, "", "", "Cancelled by user (/cancel)"
+        if proc.poll() is not None:
+            rt.join(timeout=2.0)
+            return proc.returncode, "".join(out_chunks), "", None
         rem = deadline - time.monotonic()
         if rem <= 0:
             _terminate_proc(proc)
+            rt.join(timeout=1.0)
             return None, "", "", f"Antigravity timed out after {timeout_s}s"
-        try:
-            so, se = proc.communicate(timeout=min(0.3, rem))
-            if so:
-                out_chunks.append(so)
-            if se:
-                err_chunks.append(se)
-            return proc.returncode, "".join(out_chunks), "".join(err_chunks), None
-        except subprocess.TimeoutExpired:
-            continue
+        time.sleep(min(0.15, max(0.02, rem)))
 
 
 def _terminate_proc(proc):
@@ -450,7 +468,9 @@ def route_message(text, ctx=None):
     if not cleaned:
         return {"action": "ignore"}
 
-    cmd_tok = cleaned.split()[0].split("@")[0].lower()
+    parts = cleaned.split(None, 1)
+    cmd_tok = parts[0].split("@")[0].lower()
+    arg_str = parts[1].strip() if len(parts) > 1 else ""
     if cmd_tok in ("/help", "/start"):
         return {
             "action": "reply",
@@ -461,6 +481,7 @@ def route_message(text, ctx=None):
                 "  /cancel — Abort an in-flight Antigravity turn\n"
                 "  /status — Show active leader, responder & peer status\n"
                 "  /takeover — Promote this node to active Telegram leader\n"
+                "  /login — Complete one-time Antigravity OAuth login from Telegram\n"
                 "  /help — Show this help"
             ),
         }
@@ -472,7 +493,132 @@ def route_message(text, ctx=None):
         return {"action": "status"}
     if cmd_tok == "/takeover":
         return {"action": "takeover"}
+    if cmd_tok in ("/login", "/auth"):
+        return {"action": "login", "code": arg_str}
     return {"action": "antigravity", "prompt": cleaned}
+
+
+_OAUTH_URL_RE = re.compile(r"https://accounts\.google\.com/o/oauth2/auth\S+")
+
+
+class OAuthFlowManager:
+    """Manages an interactive Antigravity CLI OAuth login flow over Telegram."""
+
+    def __init__(self, agy_bin=None, cwd=None):
+        self.agy_bin = agy_bin
+        self.cwd = cwd or os.path.expanduser("~")
+        self._lock = threading.Lock()
+        self.proc = None
+        self.oauth_url = ""
+        self.pending_prompt = ""
+        self._lines = []
+
+    def is_waiting_for_code(self):
+        with self._lock:
+            return self.proc is not None and self.proc.poll() is None
+
+    def cancel(self):
+        with self._lock:
+            p = self.proc
+            self.proc = None
+            self.oauth_url = ""
+            self.pending_prompt = ""
+        if p is not None:
+            _terminate_proc(p)
+
+    def start_flow(self, pending_prompt=""):
+        self.cancel()
+        exe = self.agy_bin or find_agy_bin()
+        if not exe:
+            return {"ok": False, "error": "agy binary not found (~/.gemini/bin/agy)"}
+
+        proc = subprocess.Popen(
+            [exe, "-p", "hi"],
+            cwd=self.cwd if os.path.isdir(self.cwd) else os.path.expanduser("~"),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            start_new_session=(os.name != "nt"),
+        )
+        lines = []
+        url_holder = {"url": ""}
+        url_ev = threading.Event()
+
+        def _reader():
+            try:
+                for ln in proc.stdout:
+                    lines.append(ln)
+                    m = _OAUTH_URL_RE.search(ln)
+                    if m and not url_holder["url"]:
+                        url_holder["url"] = m.group(0).strip()
+                        url_ev.set()
+            except Exception:
+                pass
+            finally:
+                url_ev.set()
+
+        t = threading.Thread(target=_reader, daemon=True, name="agy-oauth-reader")
+        t.start()
+        url_ev.wait(timeout=8.0)
+
+        if url_holder["url"] and proc.poll() is None:
+            with self._lock:
+                self.proc = proc
+                self.oauth_url = url_holder["url"]
+                self.pending_prompt = pending_prompt or ""
+                self._lines = lines
+            return {"ok": True, "already_authenticated": False, "url": url_holder["url"]}
+
+        # Already authenticated or exited early
+        try:
+            proc.wait(timeout=10.0)
+        except Exception:
+            _terminate_proc(proc)
+        out_txt = "".join(lines).strip()
+        if proc.returncode == 0 and "authentication required" not in out_txt.lower():
+            return {"ok": True, "already_authenticated": True, "output": out_txt}
+        return {"ok": False, "error": out_txt or "Failed to start OAuth flow"}
+
+    def submit_code(self, raw_code):
+        code = str(raw_code or "").strip()
+        if "code=" in code and ("http://" in code or "https://" in code or "?" in code or "&" in code):
+            m = re.search(r"[?&]code=([^&\s]+)", code)
+            if m:
+                import urllib.parse
+                code = urllib.parse.unquote(m.group(1))
+        with self._lock:
+            proc = self.proc
+            pending = self.pending_prompt
+            lines = self._lines
+            self.proc = None
+            self.oauth_url = ""
+            self.pending_prompt = ""
+        if proc is None or proc.poll() is not None:
+            return {"ok": False, "error": "OAuth login session expired (60s timeout). Send /login to get a fresh URL."}
+        try:
+            proc.stdin.write(code + "\n")
+            proc.stdin.flush()
+            proc.stdin.close()
+        except Exception as exc:
+            _terminate_proc(proc)
+            return {"ok": False, "error": f"Failed to send authorization code: {exc}"}
+
+        deadline = time.monotonic() + 35.0
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.25)
+        if proc.poll() is None:
+            _terminate_proc(proc)
+            return {"ok": False, "error": "Timed out verifying OAuth code. Send /login to try again."}
+
+        out_txt = "".join(lines).strip()
+        low = out_txt.lower()
+        if proc.returncode == 0 and "authentication failed" not in low and "error:" not in low:
+            return {"ok": True, "pending_prompt": pending}
+        return {"ok": False, "error": out_txt[-600:] if out_txt else f"OAuth exited with code {proc.returncode}"}
 
 
 def format_status_reply(cfg, store, chat_id):
@@ -527,6 +673,24 @@ def run_daemon(repo_root=REPO_ROOT, poll_timeout=25):
 
     active_turns = {}
     turns_lock = threading.Lock()
+    oauth_mgr = OAuthFlowManager(cwd=cwd)
+
+    def _send_oauth_prompt(chat_id, pending_prompt=""):
+        flow = oauth_mgr.start_flow(pending_prompt=pending_prompt)
+        if flow.get("already_authenticated"):
+            send_message(bot_token, chat_id, f"Antigravity CLI on {local_node} is already authenticated!")
+            return True
+        if flow.get("ok") and flow.get("url"):
+            msg_txt = (
+                f"🔐 Antigravity CLI on '{local_node}' needs a one-time OAuth sign-in:\n\n"
+                f"1. Open this link in your browser:\n{flow['url']}\n\n"
+                "2. Sign in and copy the authorization code.\n"
+                "3. Reply here with the code (within 60s) — I will complete the login automatically."
+            )
+            send_message(bot_token, chat_id, msg_txt)
+            return True
+        send_message(bot_token, chat_id, f"Could not start OAuth login on {local_node}: {flow.get('error')}")
+        return False
 
     def _start_async_turn(chat_id, prompt_text):
         cancel_ev = threading.Event()
@@ -551,6 +715,13 @@ def run_daemon(repo_root=REPO_ROOT, poll_timeout=25):
                 t_thread.join(timeout=1.0)
                 with turns_lock:
                     active_turns.pop(chat_id, None)
+
+            if res.get("auth_required"):
+                try:
+                    _send_oauth_prompt(chat_id, pending_prompt=prompt_text)
+                except Exception as exc:
+                    print(f"[telegram-agy] oauth prompt error: {exc}", flush=True)
+                return
 
             if res.get("conversation_id"):
                 store.set_conversation_id(chat_id, res["conversation_id"])
@@ -618,6 +789,7 @@ def run_daemon(repo_root=REPO_ROOT, poll_timeout=25):
                     print(f"[telegram-agy] send error: {exc}", flush=True)
                 continue
             if act == "cancel":
+                oauth_mgr.cancel()
                 with turns_lock:
                     cur_turn = active_turns.get(chat_id)
                 if cur_turn and cur_turn["thread"].is_alive():
@@ -630,7 +802,21 @@ def run_daemon(repo_root=REPO_ROOT, poll_timeout=25):
                 except Exception as exc:
                     print(f"[telegram-agy] cancel send error: {exc}", flush=True)
                 continue
+            if act == "login":
+                code_arg = route.get("code") or ""
+                if code_arg and oauth_mgr.is_waiting_for_code():
+                    res_auth = oauth_mgr.submit_code(code_arg)
+                    if res_auth.get("ok"):
+                        send_message(bot_token, chat_id, f"✅ Antigravity CLI authenticated on {local_node}!")
+                        if res_auth.get("pending_prompt"):
+                            _start_async_turn(chat_id, res_auth["pending_prompt"])
+                    else:
+                        send_message(bot_token, chat_id, f"OAuth login failed: {res_auth.get('error')}")
+                else:
+                    _send_oauth_prompt(chat_id)
+                continue
             if act == "reset":
+                oauth_mgr.cancel()
                 with turns_lock:
                     cur_turn = active_turns.get(chat_id)
                 if cur_turn and cur_turn["thread"].is_alive():
@@ -655,6 +841,15 @@ def run_daemon(repo_root=REPO_ROOT, poll_timeout=25):
                     print(f"[telegram-agy] takeover error: {exc}", flush=True)
                 continue
             if act == "antigravity":
+                if oauth_mgr.is_waiting_for_code():
+                    res_auth = oauth_mgr.submit_code(route["prompt"])
+                    if res_auth.get("ok"):
+                        send_message(bot_token, chat_id, f"✅ Antigravity CLI authenticated on {local_node}!")
+                        if res_auth.get("pending_prompt"):
+                            _start_async_turn(chat_id, res_auth["pending_prompt"])
+                    else:
+                        send_message(bot_token, chat_id, f"OAuth login failed: {res_auth.get('error')}")
+                    continue
                 with turns_lock:
                     cur_turn = active_turns.get(chat_id)
                 if cur_turn and cur_turn["thread"].is_alive():

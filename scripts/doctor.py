@@ -1055,6 +1055,8 @@ def check_peer_and_openclaw():
             assert telegram_agy_daemon.route_message("/cancel")["action"] == "cancel"
             assert telegram_agy_daemon.route_message("/status")["action"] == "status"
             assert telegram_agy_daemon.route_message("/takeover")["action"] == "takeover"
+            assert telegram_agy_daemon.route_message("/login")["action"] == "login"
+            assert telegram_agy_daemon.route_message("/login 4/0AeanS")["code"] == "4/0AeanS"
             assert telegram_agy_daemon.route_message("ping") == {"action": "antigravity", "prompt": "ping"}
             assert telegram_agy_daemon.resolve_default_cwd({}) == os.path.expanduser("~")
             assert openclaw_ctl.get_responder_mode({}) == "antigravity"
