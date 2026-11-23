@@ -26,6 +26,7 @@ for d in (SCRIPTS_DIR, TOOLS_DIR):
 
 import cluster_lib  # noqa: E402
 import install as inst  # noqa: E402
+import install_continue  # noqa: E402
 
 CLIENT_MODELS = [
     {"id": "cluster/code", "name": "Cluster Code (30B MoE -> 14B)", "ctx": 16384, "out": 4096, "tools": True, "vision": False},
@@ -197,94 +198,14 @@ def setup_vscode_byok(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
 
 
 def setup_continue(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
-    cont_dir = os.path.join(ctx["home_local"], ".continue")
-    cfg_path = os.path.join(cont_dir, "config.yaml")
-    if os_tag != "windows" and not os.path.isdir(cont_dir) and not os.environ.get("CLUSTER_INSTALL_POSIX_HOME"):
-        return
-
-    if uninstall:
-        if os.path.isfile(cfg_path):
-            print(f"[{os_tag}:continue] leaving {cfg_path} intact (backups preserved in {cont_dir})")
-        return
-
-    v1_url = endpoint.rstrip("/") + "/v1"
-    args_yaml = "\n".join(f"      - {json.dumps(a)}" for a in ctx["mcp_args"])
-    yaml_text = (
-        "# Managed by cluster-hw-llm-optimization/scripts/setup_clients.py\n"
-        "name: Cluster Local Pool (Torre + Portatil)\n"
-        "version: 1.0.0\n"
-        "schema: v1\n\n"
-        "models:\n"
-        "  - name: Cluster Code (30B MoE -> 14B)\n"
-        "    provider: lmstudio\n"
-        "    model: cluster/code\n"
-        f"    apiBase: {v1_url}\n"
-        "    roles:\n"
-        "      - chat\n"
-        "      - edit\n"
-        "      - apply\n"
-        "  - name: Cluster Code Fast (14B 72 tok/s)\n"
-        "    provider: lmstudio\n"
-        "    model: cluster/code-fast\n"
-        f"    apiBase: {v1_url}\n"
-        "    roles:\n"
-        "      - chat\n"
-        "      - edit\n"
-        "      - apply\n"
-        "  - name: Cluster Fast Agent (8B 130 tok/s)\n"
-        "    provider: lmstudio\n"
-        "    model: cluster/fast-agent\n"
-        f"    apiBase: {v1_url}\n"
-        "    roles:\n"
-        "      - chat\n"
-        "      - edit\n"
-        "      - apply\n"
-        "  - name: Cluster Vision Heavy (26B 32K)\n"
-        "    provider: lmstudio\n"
-        "    model: cluster/vision-heavy\n"
-        f"    apiBase: {v1_url}\n"
-        "    roles:\n"
-        "      - chat\n"
-        "  - name: Cluster Reasoning (R1-14B)\n"
-        "    provider: lmstudio\n"
-        "    model: cluster/reasoning\n"
-        f"    apiBase: {v1_url}\n"
-        "    roles:\n"
-        "      - chat\n"
-        "  - name: Cluster Tab Autocomplete\n"
-        "    provider: lmstudio\n"
-        "    model: cluster/autocomplete\n"
-        f"    apiBase: {v1_url}\n"
-        "    roles:\n"
-        "      - autocomplete\n"
-        "  - name: Cluster Embeddings\n"
-        "    provider: lmstudio\n"
-        "    model: cluster/embed\n"
-        f"    apiBase: {v1_url}\n"
-        "    roles:\n"
-        "      - embed\n\n"
-        "mcpServers:\n"
-        "  - name: cluster-hw-llm\n"
-        f"    command: {json.dumps(ctx['mcp_command'])}\n"
-        "    args:\n"
-        f"{args_yaml}\n"
-        "    env:\n"
-        f"      CLUSTER_REPO_ROOT: {json.dumps(ctx['repo_str'])}\n\n"
-        "context:\n"
-        "  - provider: code\n"
-        "  - provider: docs\n"
-        "  - provider: diff\n"
-        "  - provider: terminal\n"
-        "  - provider: problems\n"
-        "  - provider: folder\n"
-        "  - provider: codebase\n"
+    install_continue.install_continue_for_ctx(
+        ctx=ctx,
+        os_tag=os_tag,
+        endpoint=endpoint,
+        node="auto",
+        dry_run=dry_run,
+        uninstall=uninstall,
     )
-    print(f"[{os_tag}:continue] update {cfg_path} (backup + schema v1 roles -> {v1_url})")
-    if not dry_run:
-        os.makedirs(cont_dir, exist_ok=True)
-        _backup_if_needed(cfg_path, dry_run=False)
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            f.write(yaml_text)
 
 
 def setup_lmstudio_mcp(ctx, os_tag, dry_run=False, uninstall=False):

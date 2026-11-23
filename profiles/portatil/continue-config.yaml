@@ -1,0 +1,144 @@
+# Managed by cluster-hw-llm-optimization/scripts/install_continue.py (node=portatil)
+name: "Cluster Local Pool \u2014 Portatil (Arc 140V + LM Link)"
+version: 1.0.0
+schema: v1
+
+models:
+  - name: Cluster Code (30B MoE -> 14B)
+    provider: lmstudio
+    model: cluster/code
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 16384
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: Cluster Code Heavy (30B-A3B MoE)
+    provider: lmstudio
+    model: cluster/code-heavy
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 16384
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: Cluster Agent Heavy (30B-A3B MoE)
+    provider: lmstudio
+    model: cluster/agent-heavy
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 16384
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: Cluster Vision Heavy (26B 32K MTP-3)
+    provider: lmstudio
+    model: cluster/vision-heavy
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 32768
+    roles:
+      - chat
+    capabilities:
+      - tool_use
+      - image_input
+  - name: Cluster Code Fast (14B 72 tok/s)
+    provider: lmstudio
+    model: cluster/code-fast
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 12288
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: Cluster Fast Agent (8B 130 tok/s)
+    provider: lmstudio
+    model: cluster/fast-agent
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 16384
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: Cluster Vision (Gemma-4-12B MTP-4)
+    provider: lmstudio
+    model: cluster/vision
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 16384
+    roles:
+      - chat
+    capabilities:
+      - tool_use
+      - image_input
+  - name: Cluster Reasoning (R1-14B Think)
+    provider: lmstudio
+    model: cluster/reasoning
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 8192
+    roles:
+      - chat
+    capabilities:
+      - tool_use
+  - name: Cluster Math (Phi-4 14B)
+    provider: lmstudio
+    model: cluster/math
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 8192
+    roles:
+      - chat
+  - name: Cluster Tab Autocomplete
+    provider: lmstudio
+    model: cluster/autocomplete
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 4096
+    roles:
+      - autocomplete
+  - name: Cluster Embeddings
+    provider: lmstudio
+    model: cluster/embed
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 2048
+    roles:
+      - embed
+
+mcpServers:
+  - name: cluster-hw-llm
+    command: "python3"
+    args:
+      - "mcp/cluster_mcp_server.py"
+    env:
+      CLUSTER_REPO_ROOT: "."
+
+rules:
+  - Preserve persisted LM Studio default configs (user-concrete-model-default-config/*.json); use tools/cluster_ctl.py or node_llm_control instead of overwriting defaults.
+  - Scope LM Link model loads/unloads strictly by each node's model_prefixes; never run un-scoped lms unload --all.
+  - Prefer cluster-hw-llm MCP tools (hw_node_profile, node_llm_status, node_best_configs, cluster_models, cluster_chat) when inspecting hardware or routing prompts.
+
+context:
+  - provider: code
+  - provider: docs
+  - provider: diff
+  - provider: terminal
+  - provider: problems
+  - provider: folder
+  - provider: codebase

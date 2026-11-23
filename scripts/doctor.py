@@ -14,6 +14,7 @@ import json
 import os
 import py_compile
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -129,6 +130,14 @@ def check_json_and_plugin_schema(files):
         found = {d for d in os.listdir(sroot) if os.path.isdir(os.path.join(sroot, d))}
         assert found == EXPECTED_SKILLS, f"Skill mismatch in {sroot}: expected {EXPECTED_SKILLS}, got {found}"
     print(f"[PASS] Validated {len(json_files)} JSON files + Antigravity plugin schema + 3 focused skills")
+
+    for node_name in ("torre", "portatil"):
+        c_path = os.path.join(REPO_ROOT, "profiles", node_name, "continue-config.yaml")
+        assert os.path.isfile(c_path), f"Missing Continue template: {c_path}"
+        c_txt = open(c_path, encoding="utf-8").read()
+        for tok in ("schema: v1", "cluster/code", "cluster/autocomplete", "cluster/embed", "tool_use", "image_input", "mcpServers:", "cluster-hw-llm"):
+            assert tok in c_txt, f"Continue template {c_path} missing {tok!r}"
+    print("[PASS] Verified Continue node templates (torre & portatil)")
 
 
 def check_ceiling_math():
@@ -737,9 +746,29 @@ def check_gateway_and_clients():
         assert "browse" in lms_mcp["mcpServers"] and "cluster-hw-llm" in lms_mcp["mcpServers"]
         assert os.path.isfile(os.path.join(posix_home, ".config", "cluster-llm", "env.sh"))
         assert os.path.isfile(os.path.join(win_home, ".config", "cluster-llm", "env.ps1"))
-        cont_txt = open(os.path.join(win_home, ".continue", "config.yaml"), encoding="utf-8").read()
-        assert "cluster/autocomplete" in cont_txt
-        assert "mcpServers:" in cont_txt and "cluster-hw-llm" in cont_txt
+        for cont_p in (
+            os.path.join(win_home, ".continue", "config.yaml"),
+            os.path.join(posix_home, ".continue", "config.yaml"),
+        ):
+            cont_txt = open(cont_p, encoding="utf-8").read()
+            assert "cluster/autocomplete" in cont_txt
+            assert "tool_use" in cont_txt and "image_input" in cont_txt
+            assert "mcpServers:" in cont_txt and "cluster-hw-llm" in cont_txt
+
+        # Verify standalone install_continue.py creates missing ~/.continue on WSL and tailors for portatil
+        shutil.rmtree(os.path.join(posix_home, ".continue"))
+        ic_script = os.path.join(REPO_ROOT, "scripts", "install_continue.py")
+        r_ic = subprocess.run(
+            [sys.executable, ic_script, "--node", "portatil", "--os", "windows,wsl"],
+            stdin=subprocess.DEVNULL, env=env, text=True, capture_output=True, timeout=20,
+        )
+        assert r_ic.returncode == 0, f"install_continue failed: {r_ic.stderr or r_ic.stdout}"
+        for cont_p in (
+            os.path.join(win_home, ".continue", "config.yaml"),
+            os.path.join(posix_home, ".continue", "config.yaml"),
+        ):
+            ptxt = open(cont_p, encoding="utf-8").read()
+            assert "Portatil" in ptxt and "cluster/code-heavy" in ptxt and "mcpServers:" in ptxt
 
         r2 = subprocess.run(
             [sys.executable, setup_script, "--os", "windows,wsl", "--clients", "all", "--uninstall"],

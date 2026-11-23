@@ -76,9 +76,13 @@ opencode run --model cluster/code "Explain this module"
 `install.py` registers **`cluster-hw-llm`** (9 tools, 3 resources) in `mcp.json` (and re-enables `"chat.disableAIFeatures": false` if disabled), while `setup_clients.py` populates **`Local Cluster (LM Link)`** in `chatLanguageModels.json` without touching cloud providers.
 - Open **Copilot Chat** -> Model Picker -> select any `Cluster *` model (`Cluster Code`, `Cluster Fast Agent`, `Cluster Vision Heavy`, etc.) and attach `cluster-hw-llm` tools/resources.
 
-### 3. Continue (VS Code)
-`setup_clients.py` backs up `~/.continue/config.yaml` and writes `schema: v1` roles + the `cluster-hw-llm` `mcpServers` block:
-- **Chat / Edit / Apply:** `cluster/code`, `cluster/code-fast`, `cluster/fast-agent`, `cluster/vision-heavy`, `cluster/reasoning`
+### 3. Continue (VS Code — PC `torre` & Laptop `portatil`)
+`scripts/install_continue.py` (also called automatically by `setup_clients.py`) backs up any existing `config.yaml` and installs a node-tailored `schema: v1` config to **both Windows** (`%USERPROFILE%\.continue\config.yaml`) **and WSL** (`~/.continue/config.yaml`) with `tool_use` / `image_input` capabilities, tuned `contextLength`, cluster rules, and the `cluster-hw-llm` MCP server:
+- **Reference templates:** [profiles/torre/continue-config.yaml](../profiles/torre/continue-config.yaml) (PC) and [profiles/portatil/continue-config.yaml](../profiles/portatil/continue-config.yaml) (Laptop)
+- **Standalone Continue installer (Windows + WSL):**
+  - PC (`torre`): `python3 scripts/install_continue.py --node torre --os auto`
+  - Laptop (`portatil`): `python3 scripts/install_continue.py --node portatil --os auto` (or `--node auto` to read `cluster.local.json`)
+- **Chat / Edit / Apply:** `cluster/code`, `cluster/code-fast`, `cluster/code-heavy`, `cluster/agent-heavy`, `cluster/fast-agent`, `cluster/vision`, `cluster/vision-heavy`, `cluster/reasoning`, `cluster/math`
 - **Tab Autocomplete:** `cluster/autocomplete`
 - **Embeddings (`@codebase`):** `cluster/embed`
 - **MCP:** `cluster-hw-llm` (9 tools, 3 resources)
