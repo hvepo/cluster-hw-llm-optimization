@@ -379,7 +379,7 @@ def configure_openclaw(cfg=None, config_path=None):
                 "name": "Cluster Vision Heavy (26B 32K)",
                 "api": "openai-completions",
                 "contextWindow": 32768,
-                "maxTokens": 4096,
+                "maxTokens": 2048,
             },
         ],
     }
@@ -390,9 +390,9 @@ def configure_openclaw(cfg=None, config_path=None):
     defaults["workspace"] = ws_dir
     prev_model = defaults.get("model") or {}
     prev_fbs = [f for f in (prev_model.get("fallbacks") or []) if not str(f).startswith("cluster-local/")]
-    fallbacks = ["cluster-local/cluster/fast-agent"] + prev_fbs
+    fallbacks = ["cluster-local/cluster/code", "cluster-local/cluster/fast-agent"] + prev_fbs
     defaults["model"] = {
-        "primary": "cluster-local/cluster/code",
+        "primary": "cluster-local/cluster/vision-heavy",
         "fallbacks": fallbacks,
     }
 

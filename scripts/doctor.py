@@ -892,7 +892,8 @@ def check_peer_and_openclaw():
             migrated = json.load(open(oc_cfg_p, encoding="utf-8"))
             assert migrated["channels"]["telegram"]["botToken"] == "123:ABC"
             assert migrated["models"]["providers"]["cluster-local"]["baseUrl"] == "http://127.0.0.1:1235/v1"
-            assert migrated["agents"]["defaults"]["model"]["primary"] == "cluster-local/cluster/code"
+            assert migrated["agents"]["defaults"]["model"]["primary"] == "cluster-local/cluster/vision-heavy"
+            assert "cluster-local/cluster/code" in migrated["agents"]["defaults"]["model"]["fallbacks"]
             assert "google/gemini-3.8-flash" in migrated["agents"]["defaults"]["model"]["fallbacks"]
             assert os.path.isfile(os.path.join(tmp, "ws", "AGENTS.md"))
             if os.name != "nt":
