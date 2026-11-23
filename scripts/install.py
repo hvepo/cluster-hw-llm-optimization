@@ -412,29 +412,128 @@ def _merge_or_remove_vscode_mcp(mcp_path, ctx, os_tag, dry_run=False, uninstall=
     write_json_atomic(mcp_path, data, dry_run=dry_run)
 
 
+def _merge_or_remove_vscode_settings_mcp(settings_path, ctx, os_tag, dry_run=False, uninstall=False):
+    if uninstall:
+        if not os.path.isfile(settings_path):
+            return
+        data = load_json_safe(settings_path, {})
+        twinny = data.get("twinny.chatToolsMcpServers")
+        if isinstance(twinny, dict) and "cluster-hw-llm" in twinny:
+            print(f"[{os_tag}:vscode] uninstall twinny.chatToolsMcpServers.cluster-hw-llm from {settings_path}")
+            del twinny["cluster-hw-llm"]
+            write_json_atomic(settings_path, data, dry_run=dry_run)
+        return
+
+    data = load_json_safe(settings_path, {})
+    if data.get("chat.disableAIFeatures") is True:
+        print(f"[{os_tag}:vscode] re-enabled chat.disableAIFeatures=false in {settings_path}")
+        data["chat.disableAIFeatures"] = False
+    if not isinstance(data.get("twinny.chatToolsMcpServers"), dict):
+        data["twinny.chatToolsMcpServers"] = {}
+    data["twinny.chatToolsMcpServers"]["cluster-hw-llm"] = {
+        "command": ctx["mcp_command"],
+        "args": ctx["mcp_args"],
+        "env": {"CLUSTER_REPO_ROOT": ctx["repo_str"]},
+    }
+    print(f"[{os_tag}:vscode] merge twinny.chatToolsMcpServers.cluster-hw-llm -> {settings_path}")
+    write_json_atomic(settings_path, data, dry_run=dry_run)
+
+
+def _merge_or_remove_ext_mcp(global_storage_root, ext_roots, ctx, os_tag, dry_run=False, uninstall=False):
+    ext_specs = (
+        ("saoudrizwan.claude-dev", "cline_mcp_settings.json"),
+        ("rooveterinaryinc.roo-cline", "mcp_settings.json"),
+        ("kilocode.kilo-code", "mcp_settings.json"),
+    )
+    for ext_id, fname in ext_specs:
+        cfg_path = os.path.join(global_storage_root, ext_id, "settings", fname)
+        if uninstall:
+            if not os.path.isfile(cfg_path):
+                continue
+            data = load_json_safe(cfg_path, {})
+            srvs = data.get("mcpServers")
+            if isinstance(srvs, dict) and "cluster-hw-llm" in srvs:
+                print(f"[{os_tag}:vscode-ext] uninstall mcpServers.cluster-hw-llm from {cfg_path}")
+                del srvs["cluster-hw-llm"]
+                write_json_atomic(cfg_path, data, dry_run=dry_run)
+            continue
+
+        installed = os.path.isdir(os.path.join(global_storage_root, ext_id)) or os.path.isfile(cfg_path)
+        if not installed:
+            for er in ext_roots:
+                if os.path.isdir(er) and any(d.startswith(ext_id) for d in os.listdir(er)):
+                    installed = True
+                    break
+        if not installed:
+            continue
+
+        data = load_json_safe(cfg_path, {})
+        if not isinstance(data.get("mcpServers"), dict):
+            data["mcpServers"] = {}
+        data["mcpServers"]["cluster-hw-llm"] = {
+            "command": ctx["mcp_command"],
+            "args": ctx["mcp_args"],
+            "env": {"CLUSTER_REPO_ROOT": ctx["repo_str"]},
+            "disabled": False,
+        }
+        print(f"[{os_tag}:vscode-ext] merge mcpServers.cluster-hw-llm -> {cfg_path}")
+        write_json_atomic(cfg_path, data, dry_run=dry_run)
+
+
 def install_vscode(ctx, os_tag, dry_run=False, uninstall=False):
     src_skills = os.path.join(REPO_ROOT, "skills")
     home = ctx["home_local"]
     mcp_targets = []
+    settings_targets = []
+    ext_storage_targets = []
 
     if os_tag == "windows":
         appdata = ctx["appdata_local"]
         mcp_targets.append(os.path.join(appdata, "Code", "User", "mcp.json"))
+        settings_targets.append(os.path.join(appdata, "Code", "User", "settings.json"))
+        ext_storage_targets.append((
+            os.path.join(appdata, "Code", "User", "globalStorage"),
+            [os.path.join(home, ".vscode", "extensions")],
+        ))
         insiders_dir = os.path.join(appdata, "Code - Insiders")
         if os.path.isdir(insiders_dir):
             mcp_targets.append(os.path.join(insiders_dir, "User", "mcp.json"))
+            settings_targets.append(os.path.join(insiders_dir, "User", "settings.json"))
+            ext_storage_targets.append((
+                os.path.join(insiders_dir, "User", "globalStorage"),
+                [os.path.join(home, ".vscode-insiders", "extensions")],
+            ))
     else:
         mcp_targets.append(os.path.join(home, ".config", "Code", "User", "mcp.json"))
+        if os.path.isdir(os.path.join(home, ".config", "Code")) or os.environ.get("CLUSTER_INSTALL_POSIX_HOME"):
+            settings_targets.append(os.path.join(home, ".config", "Code", "User", "settings.json"))
+            ext_storage_targets.append((
+                os.path.join(home, ".config", "Code", "User", "globalStorage"),
+                [os.path.join(home, ".vscode", "extensions")],
+            ))
         insiders_cfg = os.path.join(home, ".config", "Code - Insiders")
         if os.path.isdir(insiders_cfg):
             mcp_targets.append(os.path.join(insiders_cfg, "User", "mcp.json"))
+            settings_targets.append(os.path.join(insiders_cfg, "User", "settings.json"))
         if os_tag == "wsl" or os.path.isdir(os.path.join(home, ".vscode-server")):
             mcp_targets.append(os.path.join(home, ".vscode-server", "data", "User", "mcp.json"))
+            settings_targets.append(os.path.join(home, ".vscode-server", "data", "Machine", "settings.json"))
+            ext_storage_targets.append((
+                os.path.join(home, ".vscode-server", "data", "User", "globalStorage"),
+                [os.path.join(home, ".vscode-server", "extensions"), os.path.join(home, ".vscode", "extensions")],
+            ))
         if os.path.isdir(os.path.join(home, ".vscode-server-insiders")):
             mcp_targets.append(os.path.join(home, ".vscode-server-insiders", "data", "User", "mcp.json"))
+            settings_targets.append(os.path.join(home, ".vscode-server-insiders", "data", "Machine", "settings.json"))
 
     for mcp_path in mcp_targets:
         _merge_or_remove_vscode_mcp(mcp_path, ctx, os_tag, dry_run=dry_run, uninstall=uninstall)
+
+    for spath in settings_targets:
+        _merge_or_remove_vscode_settings_mcp(spath, ctx, os_tag, dry_run=dry_run, uninstall=uninstall)
+
+    for gs_root, ext_roots in ext_storage_targets:
+        _merge_or_remove_ext_mcp(gs_root, ext_roots, ctx, os_tag, dry_run=dry_run, uninstall=uninstall)
 
     copilot_skills = os.path.join(home, ".copilot", "skills")
     if uninstall:

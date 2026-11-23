@@ -10,6 +10,7 @@ Non-destructively configures:
 - codex      : Optional Codex CLI profile (~/.codex/config.toml)
 """
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -207,6 +208,7 @@ def setup_continue(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         return
 
     v1_url = endpoint.rstrip("/") + "/v1"
+    args_yaml = "\n".join(f"      - {json.dumps(a)}" for a in ctx["mcp_args"])
     yaml_text = (
         "# Managed by cluster-hw-llm-optimization/scripts/setup_clients.py\n"
         "name: Cluster Local Pool (Torre + Portatil)\n"
@@ -261,6 +263,13 @@ def setup_continue(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         f"    apiBase: {v1_url}\n"
         "    roles:\n"
         "      - embed\n\n"
+        "mcpServers:\n"
+        "  - name: cluster-hw-llm\n"
+        f"    command: {json.dumps(ctx['mcp_command'])}\n"
+        "    args:\n"
+        f"{args_yaml}\n"
+        "    env:\n"
+        f"      CLUSTER_REPO_ROOT: {json.dumps(ctx['repo_str'])}\n\n"
         "context:\n"
         "  - provider: code\n"
         "  - provider: docs\n"

@@ -404,6 +404,10 @@ def main():
                 result = {"resources": RESOURCES}
             elif method == "resources/read":
                 result = read_resource(params["uri"])
+            elif method == "resources/templates/list":
+                result = {"resourceTemplates": []}
+            elif method == "prompts/list":
+                result = {"prompts": []}
             else:
                 send_message(buf_out, {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Method not found: {method}"}}, framing)
                 continue

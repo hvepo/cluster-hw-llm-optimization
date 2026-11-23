@@ -182,6 +182,10 @@ def mcp_roundtrip(framing="ndjson", live=False):
         write_msg({"jsonrpc": "2.0", "id": 3, "method": "resources/list", "params": {}})
         res_uris = [r["uri"] for r in read_msg()["result"]["resources"]]
         assert len(res_uris) == 3, f"Expected 3 resources, got {res_uris}"
+        write_msg({"jsonrpc": "2.0", "id": 31, "method": "resources/templates/list", "params": {}})
+        assert read_msg()["result"] == {"resourceTemplates": []}
+        write_msg({"jsonrpc": "2.0", "id": 32, "method": "prompts/list", "params": {}})
+        assert read_msg()["result"] == {"prompts": []}
         write_msg({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "node_best_configs", "arguments": {"node": "torre"}}})
         cat_txt = read_msg()["result"]["content"][0]["text"]
         assert "t-code-chat" in cat_txt
@@ -257,6 +261,17 @@ def check_install_matrix():
             with open(mcp_p, "w", encoding="utf-8") as f:
                 json.dump({"inputs": ["keep"], "servers": {"other-srv": {"type": "stdio", "command": "node"}}}, f)
 
+        win_settings_p = os.path.join(win_appdata, "Code", "User", "settings.json")
+        wsl_machine_settings_p = os.path.join(posix_home, ".vscode-server", "data", "Machine", "settings.json")
+        os.makedirs(os.path.dirname(win_settings_p), exist_ok=True)
+        os.makedirs(os.path.dirname(wsl_machine_settings_p), exist_ok=True)
+        with open(win_settings_p, "w", encoding="utf-8") as f:
+            json.dump({"workbench.colorTheme": "Dark+", "chat.disableAIFeatures": True}, f)
+        with open(wsl_machine_settings_p, "w", encoding="utf-8") as f:
+            json.dump({"editor.tabSize": 4}, f)
+        cline_gs = os.path.join(posix_home, ".vscode-server", "data", "User", "globalStorage", "saoudrizwan.claude-dev")
+        os.makedirs(cline_gs, exist_ok=True)
+
         for oc_p in (
             os.path.join(posix_home, ".config", "opencode", "opencode.json"),
             os.path.join(win_home, ".config", "opencode", "opencode.json"),
@@ -307,6 +322,16 @@ def check_install_matrix():
             assert "other-srv" in vd["servers"]
             assert "cluster-hw-llm" in vd["servers"]
 
+        ws_d = json.load(open(win_settings_p, encoding="utf-8"))
+        assert ws_d.get("workbench.colorTheme") == "Dark+"
+        assert ws_d.get("chat.disableAIFeatures") is False
+        assert "cluster-hw-llm" in ws_d.get("twinny.chatToolsMcpServers", {})
+        wms_d = json.load(open(wsl_machine_settings_p, encoding="utf-8"))
+        assert wms_d.get("editor.tabSize") == 4
+        assert "cluster-hw-llm" in wms_d.get("twinny.chatToolsMcpServers", {})
+        cline_cfg = json.load(open(os.path.join(cline_gs, "settings", "cline_mcp_settings.json"), encoding="utf-8"))
+        assert "cluster-hw-llm" in cline_cfg.get("mcpServers", {})
+
         # 3. Test Windows WSL-Python fallback mode (--win-use-wsl-python)
         r_fb = subprocess.run(
             [sys.executable, install_script, "--os", "windows", "--targets", "all", "--scope", "user", "--win-use-wsl-python"],
@@ -344,6 +369,14 @@ def check_install_matrix():
             vd = json.load(open(mcp_p, encoding="utf-8"))
             assert "other-srv" in vd["servers"]
             assert "cluster-hw-llm" not in vd["servers"]
+        ws_d2 = json.load(open(win_settings_p, encoding="utf-8"))
+        assert ws_d2.get("workbench.colorTheme") == "Dark+"
+        assert "cluster-hw-llm" not in ws_d2.get("twinny.chatToolsMcpServers", {})
+        wms_d2 = json.load(open(wsl_machine_settings_p, encoding="utf-8"))
+        assert wms_d2.get("editor.tabSize") == 4
+        assert "cluster-hw-llm" not in wms_d2.get("twinny.chatToolsMcpServers", {})
+        cline_cfg2 = json.load(open(os.path.join(cline_gs, "settings", "cline_mcp_settings.json"), encoding="utf-8"))
+        assert "cluster-hw-llm" not in cline_cfg2.get("mcpServers", {})
 
     print("[PASS] Install/Uninstall matrix verified across {windows, wsl} x {agy, vscode, opencode} + wsl.exe fallback")
 
@@ -704,7 +737,9 @@ def check_gateway_and_clients():
         assert "browse" in lms_mcp["mcpServers"] and "cluster-hw-llm" in lms_mcp["mcpServers"]
         assert os.path.isfile(os.path.join(posix_home, ".config", "cluster-llm", "env.sh"))
         assert os.path.isfile(os.path.join(win_home, ".config", "cluster-llm", "env.ps1"))
-        assert "cluster/autocomplete" in open(os.path.join(win_home, ".continue", "config.yaml"), encoding="utf-8").read()
+        cont_txt = open(os.path.join(win_home, ".continue", "config.yaml"), encoding="utf-8").read()
+        assert "cluster/autocomplete" in cont_txt
+        assert "mcpServers:" in cont_txt and "cluster-hw-llm" in cont_txt
 
         r2 = subprocess.run(
             [sys.executable, setup_script, "--os", "windows,wsl", "--clients", "all", "--uninstall"],

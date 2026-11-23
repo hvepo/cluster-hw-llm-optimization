@@ -72,19 +72,21 @@ opencode run --model cluster/code "Explain this module"
 # Or pick inside the TUI with /models -> Local Cluster (Torre + Portatil)
 ```
 
-### 2. VS Code Copilot BYOK
-`setup_clients.py` populates **`Local Cluster (LM Link)`** in `chatLanguageModels.json` while keeping your cloud providers intact.
-- Open **Copilot Chat** -> Model Picker -> select any `Cluster *` model (`Cluster Code`, `Cluster Fast Agent`, `Cluster Vision Heavy`, etc.).
+### 2. VS Code Copilot BYOK & Built-in MCP
+`install.py` registers **`cluster-hw-llm`** (9 tools, 3 resources) in `mcp.json` (and re-enables `"chat.disableAIFeatures": false` if disabled), while `setup_clients.py` populates **`Local Cluster (LM Link)`** in `chatLanguageModels.json` without touching cloud providers.
+- Open **Copilot Chat** -> Model Picker -> select any `Cluster *` model (`Cluster Code`, `Cluster Fast Agent`, `Cluster Vision Heavy`, etc.) and attach `cluster-hw-llm` tools/resources.
 
 ### 3. Continue (VS Code)
-`setup_clients.py` backs up `~/.continue/config.yaml` and writes `schema: v1` roles:
+`setup_clients.py` backs up `~/.continue/config.yaml` and writes `schema: v1` roles + the `cluster-hw-llm` `mcpServers` block:
 - **Chat / Edit / Apply:** `cluster/code`, `cluster/code-fast`, `cluster/fast-agent`, `cluster/vision-heavy`, `cluster/reasoning`
 - **Tab Autocomplete:** `cluster/autocomplete`
 - **Embeddings (`@codebase`):** `cluster/embed`
+- **MCP:** `cluster-hw-llm` (9 tools, 3 resources)
 
-### 4. Cline / Roo Code / Twinny (VS Code Extensions)
-- **Cline / Roo Code:** API Provider = `OpenAI Compatible`, Base URL = `http://127.0.0.1:1235/v1`, API Key = `local-cluster`, Model ID = `cluster/code` (or `cluster/agent-heavy`).
-- **Twinny:** Set Chat/FIM host `127.0.0.1`, port `1235`, model `cluster/code` (chat) and `cluster/autocomplete` (FIM).
+### 4. Cline / Roo Code / Kilo Code / Twinny (VS Code Extensions)
+`install.sh` / `install.ps1` (`--targets vscode`) automatically registers `cluster-hw-llm` across installed extensions on both Windows and WSL (`torre` and `portatil`):
+- **Twinny:** Populates `twinny.chatToolsMcpServers.cluster-hw-llm` in VS Code `settings.json` (and WSL Remote `Machine/settings.json`). Set Chat/FIM host `127.0.0.1`, port `1235`, model `cluster/code` (chat) and `cluster/autocomplete` (FIM).
+- **Cline / Roo Code / Kilo Code:** Automatically merges `mcpServers.cluster-hw-llm` into each installed extension's `globalStorage/*/settings/*mcp_settings.json`. Set API Provider = `OpenAI Compatible`, Base URL = `http://127.0.0.1:1235/v1`, API Key = `local-cluster`, Model ID = `cluster/code` (or `cluster/agent-heavy`).
 
 ### 5. LM Studio Native `/api/v1/chat` & Stateful MCP Helper
 ```bash
