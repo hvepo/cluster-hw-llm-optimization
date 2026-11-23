@@ -212,13 +212,15 @@ def collect_status(cfg, node_filter=None):
     return out
 
 
-def _write_offline_queue(sync_dir, target_node, kind, payload):
+def _write_offline_queue(sync_dir, target_node, kind, payload, token=None):
     if not sync_dir:
         raise RuntimeError("Offline Google Drive sync_dir is not configured/mounted")
     job_id = payload.get("job_id") or f"job_{int(time.time())}_{uuid.uuid4().hex[:8]}"
     inbox = os.path.join(sync_dir, "peer-queue", f"to_{target_node}")
     os.makedirs(inbox, exist_ok=True)
     record = {"job_id": job_id, "kind": kind, "queued_at": time.time(), **payload}
+    if token:
+        record["hmac_sha256"] = peer_daemon.sign_queue_payload(record, token)
     tmp = os.path.join(inbox, f".{job_id}.tmp")
     dst = os.path.join(inbox, f"{job_id}.json")
     with open(tmp, "w", encoding="utf-8") as f:
@@ -255,7 +257,7 @@ def send_order(cfg, target_node, prompt, target_os="auto", mode="auto", agent=No
     except Exception as exc:
         if not queue_if_offline:
             return {"ok": False, "node": target_node, "error": str(exc)}
-    return _write_offline_queue(sync_dir, target_node or (cfg.get("local_node") or "torre"), "order", payload)
+    return _write_offline_queue(sync_dir, target_node or (cfg.get("local_node") or "torre"), "order", payload, token=token)
 
 
 def exec_command(cfg, target_node, command, target_os="auto", cwd=None, wait_s=30.0, timeout_s=120, queue_if_offline=True):
@@ -276,7 +278,7 @@ def exec_command(cfg, target_node, command, target_os="auto", cwd=None, wait_s=3
     except Exception as exc:
         if not queue_if_offline:
             return {"ok": False, "node": target_node, "error": str(exc)}
-    return _write_offline_queue(sync_dir, target_node or (cfg.get("local_node") or "torre"), "exec", payload)
+    return _write_offline_queue(sync_dir, target_node or (cfg.get("local_node") or "torre"), "exec", payload, token=token)
 
 
 def get_job_status(cfg, job_id, target_node=None):

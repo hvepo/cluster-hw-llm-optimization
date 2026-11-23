@@ -592,8 +592,12 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
         self.wfile.flush()
 
+    MAX_BODY_BYTES = 10 * 1024 * 1024
+
     def _read_body(self):
         length = int(self.headers.get("Content-Length") or "0")
+        if length > self.MAX_BODY_BYTES:
+            raise ValueError(f"Request body too large ({length} bytes > {self.MAX_BODY_BYTES})")
         return self.rfile.read(length) if length > 0 else b""
 
     def do_OPTIONS(self):
@@ -764,6 +768,8 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
 
         prev_id = body.get("previous_response_id")
         res = self.router.resolve_model(req_model, previous_response_id=prev_id)
+        if prev_id and not res.get("pinned"):
+            body.pop("previous_response_id", None)
         body["model"] = res["resolved"]
         _inject_defaults_for_alias(path, body, res)
         self._proxy_request("POST", self.path, json.dumps(body).encode("utf-8"), res)

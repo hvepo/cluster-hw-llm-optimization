@@ -7,6 +7,7 @@ and cross-OS (`wsl` / `windows`) commands asynchronously, and polls the shared o
 queue (`<sync_dir>/peer-queue/to_<local_node>/`).
 """
 import argparse
+import hashlib
 import hmac
 import json
 import os
@@ -87,6 +88,24 @@ def find_agy_bin():
     return None
 
 
+def sign_queue_payload(payload, token):
+    if not token:
+        return ""
+    body = {k: v for k, v in payload.items() if k != "hmac_sha256"}
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hmac.new(token.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
+
+
+def verify_queue_payload(payload, token):
+    if not token:
+        return True
+    got = str(payload.get("hmac_sha256") or "").strip()
+    if not got:
+        return False
+    expected = sign_queue_payload(payload, token)
+    return hmac.compare_digest(got, expected)
+
+
 class PeerRuntime:
     def __init__(self, repo_root=REPO_ROOT, token=None, sync_dir=None, default_mode=None):
         self.repo_root = repo_root
@@ -108,7 +127,11 @@ class PeerRuntime:
         jpath = os.path.join(self.jobs_dir, f"{job['job_id']}.json")
         with open(jpath, "w", encoding="utf-8") as f:
             json.dump(job, f, indent=2)
-        if self.sync_dir and job.get("status") in ("completed", "failed"):
+        try:
+            os.chmod(jpath, 0o600)
+        except OSError:
+            pass
+        if self.sync_dir and job.get("transport") == "drive_queue" and job.get("status") in ("completed", "failed"):
             comp_dir = os.path.join(self.sync_dir, "peer-queue", "completed")
             try:
                 os.makedirs(comp_dir, exist_ok=True)
@@ -311,6 +334,10 @@ class PeerRuntime:
                 continue
             try:
                 payload = json.load(open(claimed, encoding="utf-8"))
+                if self.token and not verify_queue_payload(payload, self.token):
+                    print(f"[peer-daemon] rejected unsigned/tampered offline queue file: {fn}", file=sys.stderr)
+                    continue
+                payload.pop("hmac_sha256", None)
                 kind = payload.pop("kind", "order")
                 self.submit_job(kind, payload, transport="drive_queue", wait_s=0.0)
                 processed += 1
@@ -373,10 +400,14 @@ def make_handler(runtime: PeerRuntime):
                 return False
             return True
 
+        MAX_BODY_BYTES = 10 * 1024 * 1024
+
         def _read_json(self):
             ln = int(self.headers.get("Content-Length") or 0)
             if ln <= 0:
                 return {}
+            if ln > self.MAX_BODY_BYTES:
+                raise ValueError(f"Request body too large ({ln} bytes > {self.MAX_BODY_BYTES})")
             return json.loads(self.rfile.read(ln).decode("utf-8"))
 
         def do_GET(self):
@@ -454,7 +485,6 @@ def make_handler(runtime: PeerRuntime):
                 elif act == "stop":
                     res = openclaw_ctl.cmd_stop(cfg, release_lease=True)
                 elif act == "fence":
-                    openclaw_ctl.stop_sentinel_daemon()
                     res = openclaw_ctl.cmd_stop(cfg, release_lease=True)
                 elif act == "takeover":
                     res = openclaw_ctl.cmd_takeover(cfg)

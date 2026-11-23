@@ -512,7 +512,7 @@ class LeaseStore:
     def release(self, node_name, now=None):
         ts = time.time() if now is None else now
         cur = self.read_lease()
-        if not cur or cur.get("holder_node") != node_name:
+        if not cur or cur.get("holder_node") != node_name or cur.get("state") != "LEADER":
             return False
         cur["renewed_at"] = ts
         cur["expires_at"] = ts - 1.0
@@ -753,6 +753,7 @@ def cmd_takeover(cfg):
     time.sleep(0.8)
     res = cmd_start(cfg, force=True, manual_leader=local_node)
     res["fence_result"] = fence_res
+    start_sentinel_daemon(cfg)
     return res
 
 
@@ -859,7 +860,7 @@ def run_sentinel_loop(cfg, once=False):
                 failures = 0
                 if manual == local_node:
                     cmd_start(cfg, force=False, manual_leader=local_node)
-                elif _read_pid(_oc_pid_file()) or cur_holder == local_node:
+                elif _read_pid(_oc_pid_file()) or (cur_holder == local_node and (lease or {}).get("state") == "LEADER"):
                     cmd_stop(cfg, release_lease=True)
             else:
                 failures += 1
@@ -1033,7 +1034,6 @@ def main(argv=None):
     elif args.cmd == "stop":
         res = cmd_stop(cfg, release_lease=True)
     elif args.cmd == "fence":
-        stop_sentinel_daemon()
         res = cmd_stop(cfg, release_lease=True)
     elif args.cmd == "takeover":
         res = cmd_takeover(cfg)

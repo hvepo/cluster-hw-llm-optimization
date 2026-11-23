@@ -883,12 +883,18 @@ def check_peer_and_openclaw():
                 jb = json.loads(r.read().decode("utf-8"))
                 assert jb["job"]["job_id"] == ex["job_id"]
 
-            # 3. Offline queue poller fallback
+            # 3. Offline queue poller fallback (with HMAC-SHA256 verification)
             inbox = os.path.join(sync_dir, "peer-queue", f"to_{rt.local_node}")
             os.makedirs(inbox, exist_ok=True)
+            with open(os.path.join(inbox, "job_unsigned.json"), "w", encoding="utf-8") as f:
+                json.dump({"job_id": "job_unsigned", "kind": "exec", "command": "echo tampering", "target_os": "wsl"}, f)
+            assert rt.poll_offline_queue_once() == 0, "Unsigned offline queue payload must be rejected"
+
             q_id = "job_offline_test"
+            q_rec = {"job_id": q_id, "kind": "exec", "command": "echo drive-ok", "target_os": "wsl"}
+            q_rec["hmac_sha256"] = peer_daemon.sign_queue_payload(q_rec, tok)
             with open(os.path.join(inbox, f"{q_id}.json"), "w", encoding="utf-8") as f:
-                json.dump({"job_id": q_id, "kind": "exec", "command": "echo drive-ok", "target_os": "wsl"}, f)
+                json.dump(q_rec, f)
             assert rt.poll_offline_queue_once() == 1
             comp_path = os.path.join(sync_dir, "peer-queue", "completed", f"{q_id}.json")
             deadline = time.time() + 8.0
@@ -898,7 +904,7 @@ def check_peer_and_openclaw():
             comp = json.load(open(comp_path, encoding="utf-8"))
             assert comp["status"] == "completed" and "drive-ok" in comp["stdout"]
 
-            # 4. OpenClaw HA Lease conflict/expiry/takeover + openclaw.json migration
+            # 4. OpenClaw HA Lease conflict/expiry/takeover/idempotent-release + openclaw.json migration
             store = openclaw_ctl.LeaseStore(sync_dir)
             ok1, _ = store.acquire_or_renew("torre", pid=111, ttl_s=30, now=1000.0)
             assert ok1 is True
@@ -906,6 +912,8 @@ def check_peer_and_openclaw():
             assert ok_conflict is False
             ok_failover, l2 = store.acquire_or_renew("portatil", pid=222, ttl_s=30, now=1035.0)
             assert ok_failover is True and l2["holder_node"] == "portatil" and l2["epoch"] == 2
+            assert store.release("portatil", now=1038.0) is True
+            assert store.release("portatil", now=1039.0) is False, "Second release on STANDBY lease must be a no-op (prevents Drive write-storm)"
             ok_takeover, l3 = store.acquire_or_renew("torre", pid=333, ttl_s=30, force=True, manual_leader="torre", now=1040.0)
             assert ok_takeover is True and l3["holder_node"] == "torre" and l3["epoch"] == 3
 
@@ -1025,7 +1033,9 @@ def check_peer_and_openclaw():
             assert telegram_agy_daemon.route_message("")["action"] == "ignore"
             assert telegram_agy_daemon.route_message("/help")["action"] == "reply"
             assert telegram_agy_daemon.route_message("/new")["action"] == "reset"
+            assert telegram_agy_daemon.route_message("/cancel")["action"] == "cancel"
             assert telegram_agy_daemon.route_message("/status")["action"] == "status"
+            assert telegram_agy_daemon.route_message("/takeover")["action"] == "takeover"
             assert telegram_agy_daemon.route_message("ping") == {"action": "antigravity", "prompt": "ping"}
             assert telegram_agy_daemon.resolve_default_cwd({}) == os.path.expanduser("~")
             assert openclaw_ctl.get_responder_mode({}) == "antigravity"

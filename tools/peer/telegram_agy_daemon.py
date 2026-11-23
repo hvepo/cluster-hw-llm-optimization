@@ -337,6 +337,64 @@ def build_telegram_prompt(user_text, local_node, is_new_session=True):
     )
 
 
+def _run_agy_subprocess(cmd, work_dir, timeout_s, cancel_event=None):
+    proc = subprocess.Popen(
+        cmd,
+        cwd=work_dir,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=(os.name != "nt"),
+    )
+    deadline = time.monotonic() + float(timeout_s)
+    out_chunks = []
+    err_chunks = []
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            _terminate_proc(proc)
+            return None, "", "", "Cancelled by user (/cancel)"
+        rem = deadline - time.monotonic()
+        if rem <= 0:
+            _terminate_proc(proc)
+            return None, "", "", f"Antigravity timed out after {timeout_s}s"
+        try:
+            so, se = proc.communicate(timeout=min(0.3, rem))
+            if so:
+                out_chunks.append(so)
+            if se:
+                err_chunks.append(se)
+            return proc.returncode, "".join(out_chunks), "".join(err_chunks), None
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _terminate_proc(proc):
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name != "nt" and hasattr(os, "killpg"):
+            os.killpg(proc.pid, signal.SIGTERM)
+        else:
+            proc.terminate()
+    except Exception:
+        pass
+    try:
+        proc.communicate(timeout=1.0)
+    except Exception:
+        try:
+            if os.name != "nt" and hasattr(os, "killpg"):
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.communicate(timeout=0.5)
+        except Exception:
+            pass
+
+
 def run_antigravity_turn(
     prompt,
     conversation_id=None,
@@ -347,6 +405,7 @@ def run_antigravity_turn(
     timeout_s=300,
     agy_bin=None,
     local_node="torre",
+    cancel_event=None,
 ):
     exe = agy_bin or find_agy_bin()
     if not exe:
@@ -359,20 +418,13 @@ def run_antigravity_turn(
     framed_prompt = build_telegram_prompt(prompt, local_node=local_node, is_new_session=not bool(conversation_id))
     cmd = build_agy_command(exe, framed_prompt, conversation_id=conversation_id, autonomous=autonomous, model=model, mode=mode)
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=work_dir,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            capture_output=True,
-            timeout=timeout_s,
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "text": "", "conversation_id": conversation_id, "error": f"Antigravity timed out after {timeout_s}s"}
+        rc, out_s, err_s, abort_err = _run_agy_subprocess(cmd, work_dir, timeout_s, cancel_event=cancel_event)
+        if abort_err:
+            return {"ok": False, "text": "", "conversation_id": conversation_id, "error": abort_err}
     except Exception as exc:
         return {"ok": False, "text": "", "conversation_id": conversation_id, "error": str(exc)}
 
-    res = parse_agy_output(proc.stdout, proc.stderr, proc.returncode)
+    res = parse_agy_output(out_s, err_s, rc)
     if (
         not res["ok"]
         and conversation_id
@@ -382,15 +434,9 @@ def run_antigravity_turn(
         fresh_prompt = build_telegram_prompt(prompt, local_node=local_node, is_new_session=True)
         fresh_cmd = build_agy_command(exe, fresh_prompt, conversation_id=None, autonomous=autonomous, model=model, mode=mode)
         try:
-            proc2 = subprocess.run(
-                fresh_cmd,
-                cwd=work_dir,
-                stdin=subprocess.DEVNULL,
-                text=True,
-                capture_output=True,
-                timeout=timeout_s,
-            )
-            return parse_agy_output(proc2.stdout, proc2.stderr, proc2.returncode)
+            rc2, out2, err2, abort2 = _run_agy_subprocess(fresh_cmd, work_dir, timeout_s, cancel_event=cancel_event)
+            if not abort2:
+                return parse_agy_output(out2, err2, rc2)
         except Exception:
             pass
     return res
@@ -410,14 +456,20 @@ def route_message(text, ctx=None):
                 "Antigravity Telegram Bridge is active.\n"
                 "Commands:\n"
                 "  /new — Start a fresh Antigravity conversation\n"
+                "  /cancel — Abort an in-flight Antigravity turn\n"
                 "  /status — Show active leader, responder & peer status\n"
+                "  /takeover — Promote this node to active Telegram leader\n"
                 "  /help — Show this help"
             ),
         }
     if cmd_tok in ("/new", "/reset"):
         return {"action": "reset", "text": "Started a fresh Antigravity session."}
+    if cmd_tok in ("/cancel", "/stop"):
+        return {"action": "cancel"}
     if cmd_tok == "/status":
         return {"action": "status"}
+    if cmd_tok == "/takeover":
+        return {"action": "takeover"}
     return {"action": "antigravity", "prompt": cleaned}
 
 
@@ -471,6 +523,46 @@ def run_daemon(repo_root=REPO_ROOT, poll_timeout=25):
         flush=True,
     )
 
+    active_turns = {}
+    turns_lock = threading.Lock()
+
+    def _start_async_turn(chat_id, prompt_text):
+        cancel_ev = threading.Event()
+
+        def _worker():
+            conv_id = store.get_conversation_id(chat_id)
+            t_stop, t_thread = start_typing_loop(bot_token, chat_id)
+            try:
+                res = run_antigravity_turn(
+                    prompt_text,
+                    conversation_id=conv_id,
+                    cwd=cwd,
+                    autonomous=autonomous,
+                    model=model,
+                    mode=mode,
+                    timeout_s=timeout_s,
+                    local_node=local_node,
+                    cancel_event=cancel_ev,
+                )
+            finally:
+                t_stop.set()
+                t_thread.join(timeout=1.0)
+                with turns_lock:
+                    active_turns.pop(chat_id, None)
+
+            if res.get("conversation_id"):
+                store.set_conversation_id(chat_id, res["conversation_id"])
+            reply_text = res["text"] if res.get("ok") else f"Antigravity error: {res.get('error') or 'unknown error'}"
+            try:
+                send_message(bot_token, chat_id, reply_text)
+            except Exception as exc:
+                print(f"[telegram-agy] reply send error: {exc}", flush=True)
+
+        th = threading.Thread(target=_worker, daemon=True, name=f"tg-agy-{chat_id}")
+        with turns_lock:
+            active_turns[chat_id] = {"thread": th, "cancel": cancel_ev, "started_at": time.time()}
+        th.start()
+
     while not stop_event.is_set():
         offset = store.get_offset()
         req_payload = {
@@ -483,7 +575,11 @@ def run_daemon(repo_root=REPO_ROOT, poll_timeout=25):
         try:
             updates = tg_api_call(bot_token, "getUpdates", req_payload, timeout=int(poll_timeout) + 10) or []
         except TelegramConflictError as exc:
-            print(f"[telegram-agy] {exc}; stopping poller", flush=True)
+            print(f"[telegram-agy] {exc}; releasing lease and stopping poller", flush=True)
+            try:
+                openclaw_ctl.LeaseStore(sync_dir).release(local_node)
+            except Exception:
+                pass
             return 49
         except Exception as exc:
             print(f"[telegram-agy] poll error: {exc}", flush=True)
@@ -519,7 +615,24 @@ def run_daemon(repo_root=REPO_ROOT, poll_timeout=25):
                 except Exception as exc:
                     print(f"[telegram-agy] send error: {exc}", flush=True)
                 continue
+            if act == "cancel":
+                with turns_lock:
+                    cur_turn = active_turns.get(chat_id)
+                if cur_turn and cur_turn["thread"].is_alive():
+                    cur_turn["cancel"].set()
+                    msg_txt = "Cancelling active Antigravity task..."
+                else:
+                    msg_txt = "No active task to cancel."
+                try:
+                    send_message(bot_token, chat_id, msg_txt)
+                except Exception as exc:
+                    print(f"[telegram-agy] cancel send error: {exc}", flush=True)
+                continue
             if act == "reset":
+                with turns_lock:
+                    cur_turn = active_turns.get(chat_id)
+                if cur_turn and cur_turn["thread"].is_alive():
+                    cur_turn["cancel"].set()
                 store.clear_conversation(chat_id)
                 try:
                     send_message(bot_token, chat_id, route["text"])
@@ -532,31 +645,23 @@ def run_daemon(repo_root=REPO_ROOT, poll_timeout=25):
                 except Exception as exc:
                     print(f"[telegram-agy] status send error: {exc}", flush=True)
                 continue
-            if act == "antigravity":
-                conv_id = store.get_conversation_id(chat_id)
-                t_stop, t_thread = start_typing_loop(bot_token, chat_id)
+            if act == "takeover":
                 try:
-                    res = run_antigravity_turn(
-                        route["prompt"],
-                        conversation_id=conv_id,
-                        cwd=cwd,
-                        autonomous=autonomous,
-                        model=model,
-                        mode=mode,
-                        timeout_s=timeout_s,
-                        local_node=local_node,
-                    )
-                finally:
-                    t_stop.set()
-                    t_thread.join(timeout=1.0)
-
-                if res.get("conversation_id"):
-                    store.set_conversation_id(chat_id, res["conversation_id"])
-                reply_text = res["text"] if res.get("ok") else f"Antigravity error: {res.get('error') or 'unknown error'}"
-                try:
-                    send_message(bot_token, chat_id, reply_text)
+                    tk = openclaw_ctl.cmd_takeover(cfg)
+                    send_message(bot_token, chat_id, f"Takeover on {local_node}: ok={tk.get('ok')}")
                 except Exception as exc:
-                    print(f"[telegram-agy] reply send error: {exc}", flush=True)
+                    print(f"[telegram-agy] takeover error: {exc}", flush=True)
+                continue
+            if act == "antigravity":
+                with turns_lock:
+                    cur_turn = active_turns.get(chat_id)
+                if cur_turn and cur_turn["thread"].is_alive():
+                    try:
+                        send_message(bot_token, chat_id, "Busy running previous task (send /cancel to abort or /status to check).")
+                    except Exception:
+                        pass
+                    continue
+                _start_async_turn(chat_id, route["prompt"])
 
     print("[telegram-agy] stopped cleanly", flush=True)
     return 0
