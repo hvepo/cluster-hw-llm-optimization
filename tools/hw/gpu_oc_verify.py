@@ -33,6 +33,7 @@ from cluster_lib import (  # noqa: E402
     load_cluster_config,
     node_url,
     resolve_afterburner_cfg,
+    resolve_host_binary,
     resolve_lms_cli,
     resolve_win_python,
 )
@@ -74,12 +75,14 @@ def decode_afterburner_vf(cfg_path, section="Startup"):
 
 
 def sample_smi_once():
+    smi = resolve_host_binary("nvidia-smi")
     out = subprocess.check_output(
         [
-            "nvidia-smi",
+            smi,
             "--query-gpu=clocks.gr,clocks.mem,power.draw,temperature.gpu,clocks_event_reasons.active",
             "--format=csv,noheader,nounits",
         ],
+        stdin=subprocess.DEVNULL,
         text=True,
         timeout=5,
     ).strip().splitlines()[0]
@@ -174,7 +177,8 @@ def check_nvlddmkm(since_iso):
         "Write-Host ('Matching events: ' + $ev.Count); "
         "$ev | Select-Object TimeCreated,Id,LevelDisplayName,ProviderName | Format-Table -AutoSize; exit 0"
     )
-    r = subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps], stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=30)
+    ps_bin = resolve_host_binary("powershell.exe")
+    r = subprocess.run([ps_bin, "-NoProfile", "-Command", ps], stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=30)
     out = (r.stdout or "") + (r.stderr or "")
     cnt = None
     for line in out.splitlines():
@@ -199,7 +203,8 @@ def main():
     win_py = resolve_win_python(cfg)
     bw_script = os.path.join(HW_DIR, "bw_test.py")
     if detect_platform() == "wsl":
-        bw_script = subprocess.check_output(["wslpath", "-w", bw_script], text=True).strip()
+        wslpath_bin = resolve_host_binary("wslpath")
+        bw_script = subprocess.check_output([wslpath_bin, "-w", bw_script], stdin=subprocess.DEVNULL, text=True).strip()
 
     since_iso = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     base_url = node_url(node, cfg)

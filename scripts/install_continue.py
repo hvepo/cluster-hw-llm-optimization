@@ -22,120 +22,12 @@ for d in (SCRIPTS_DIR, TOOLS_DIR):
     if d not in sys.path:
         sys.path.insert(0, d)
 
+import catalog  # noqa: E402
 import cluster_lib  # noqa: E402
 import install as inst  # noqa: E402
 
-CONTINUE_MODEL_SPECS = {
-    "cluster/code": {
-        "name": "Cluster Code (30B MoE -> 14B)",
-        "ctx": 16384,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "cluster/fast-agent": {
-        "name": "Cluster Fast Agent (8B 130 tok/s)",
-        "ctx": 16384,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "cluster/vision-heavy": {
-        "name": "Cluster Vision Heavy (26B 32K)",
-        "ctx": 32768,
-        "roles": ["chat"],
-        "capabilities": ["tool_use", "image_input"],
-    },
-    "cluster/reasoning": {
-        "name": "Cluster Reasoning (R1-14B Think)",
-        "ctx": 8192,
-        "roles": ["chat"],
-        "capabilities": ["tool_use"],
-    },
-    "cluster/math": {
-        "name": "Cluster Math (Phi-4 14B)",
-        "ctx": 8192,
-        "roles": ["chat"],
-        "capabilities": [],
-    },
-    "nim/ultra": {
-        "name": "NIM Ultra (550B Cloud Orchestrator)",
-        "ctx": 131072,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "nim/fast": {
-        "name": "NIM Fast (30B Cloud Lightning)",
-        "ctx": 131072,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "nim/code": {
-        "name": "NIM Code (Laguna-XS Cloud Coder)",
-        "ctx": 65536,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "nim/vision": {
-        "name": "NIM Vision (120B Cloud VL)",
-        "ctx": 131072,
-        "roles": ["chat"],
-        "capabilities": ["tool_use", "image_input"],
-    },
-    "nim/reasoning": {
-        "name": "NIM Reasoning (30B Cloud CoT)",
-        "ctx": 131072,
-        "roles": ["chat"],
-        "capabilities": ["tool_use"],
-    },
-    "gemini/orchestrator": {
-        "name": "Gemini Pro Orchestrator (Autonomous Cloud)",
-        "ctx": 1000000,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "gemini/pro": {
-        "name": "Gemini Pro (Flagship Cloud Architect)",
-        "ctx": 1000000,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "gemini/flash": {
-        "name": "Gemini Flash (Fast Cloud Assistant)",
-        "ctx": 1000000,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "cluster/autocomplete": {
-        "name": "Cluster Tab Autocomplete",
-        "ctx": 4096,
-        "roles": ["autocomplete"],
-        "capabilities": [],
-    },
-    "cluster/embed": {
-        "name": "Cluster Embeddings",
-        "ctx": 2048,
-        "roles": ["embed"],
-        "capabilities": [],
-    },
-}
-
-CURATED_ORDER = [
-    "cluster/code",
-    "cluster/fast-agent",
-    "cluster/vision-heavy",
-    "cluster/reasoning",
-    "cluster/math",
-    "nim/ultra",
-    "nim/fast",
-    "nim/code",
-    "nim/vision",
-    "nim/reasoning",
-    "gemini/orchestrator",
-    "gemini/pro",
-    "gemini/flash",
-    "cluster/autocomplete",
-    "cluster/embed",
-]
-
+CONTINUE_MODEL_SPECS = catalog.CONTINUE_MODEL_SPECS
+CURATED_ORDER = catalog.CURATED_ORDER
 TORRE_ORDER = list(CURATED_ORDER)
 PORTATIL_ORDER = list(CURATED_ORDER)
 
@@ -145,6 +37,7 @@ def _backup_if_needed(path, dry_run=False):
         return
     stamp = time.strftime("%Y%m%d-%H%M%S")
     shutil.copy2(path, f"{path}.{stamp}.bak")
+    cluster_lib.prune_old_files(os.path.dirname(path), os.path.basename(path) + ".*.bak", max_age_days=14, max_count=5)
 
 
 def resolve_node_name(node=None):
@@ -154,7 +47,7 @@ def resolve_node_name(node=None):
     return (cfg.get("local_node") or "torre").strip().lower()
 
 
-def render_continue_yaml(node, endpoint, mcp_command, mcp_args, repo_str):
+def render_continue_yaml(node, endpoint, mcp_command, mcp_args, repo_str, api_key=None, include_all=False):
     norm_node = (node or "torre").strip().lower()
     v1_url = endpoint.rstrip("/") + "/v1"
 
@@ -168,6 +61,9 @@ def render_continue_yaml(node, endpoint, mcp_command, mcp_args, repo_str):
         cfg_name = f"Cluster Local Pool — {norm_node} (LM Link)"
         order = TORRE_ORDER
 
+    has_nim = include_all or bool(cluster_lib.resolve_nvidia_api_key())
+    has_gemini = include_all or cluster_lib.is_gemini_pro_configured()
+
     lines = [
         f"# Managed by cluster-hw-llm-optimization/scripts/install_continue.py (node={norm_node})",
         f"name: {json.dumps(cfg_name)}",
@@ -178,12 +74,20 @@ def render_continue_yaml(node, endpoint, mcp_command, mcp_args, repo_str):
     ]
 
     for model_id in order:
+        if model_id.startswith("nim/") and not has_nim:
+            continue
+        if model_id.startswith("gemini/") and not has_gemini:
+            continue
         spec = CONTINUE_MODEL_SPECS[model_id]
         lines.extend([
             f"  - name: {spec['name']}",
             "    provider: lmstudio",
             f"    model: {model_id}",
             f"    apiBase: {v1_url}",
+        ])
+        if api_key:
+            lines.append(f"    apiKey: {json.dumps(api_key)}")
+        lines.extend([
             "    defaultCompletionOptions:",
             f"      contextLength: {spec['ctx']}",
             "    roles:",
@@ -235,6 +139,8 @@ def write_profile_templates(endpoint="http://127.0.0.1:1235", dry_run=False):
             mcp_command="python3",
             mcp_args=["mcp/cluster_mcp_server.py"],
             repo_str=".",
+            api_key=None,
+            include_all=True,
         )
         print(f"[template:{node_name}] write {out_path}")
         if not dry_run:
@@ -243,7 +149,7 @@ def write_profile_templates(endpoint="http://127.0.0.1:1235", dry_run=False):
                 f.write(yaml_text)
 
 
-def install_continue_for_ctx(ctx, os_tag, endpoint, node="auto", dry_run=False, uninstall=False):
+def install_continue_for_ctx(ctx, os_tag, endpoint, node="auto", dry_run=False, uninstall=False, api_key=None):
     cont_dir = os.path.join(ctx["home_local"], ".continue")
     cfg_path = os.path.join(cont_dir, "config.yaml")
 
@@ -252,6 +158,9 @@ def install_continue_for_ctx(ctx, os_tag, endpoint, node="auto", dry_run=False, 
             print(f"[{os_tag}:continue] leaving {cfg_path} intact (backups preserved in {cont_dir})")
         return
 
+    if api_key is None:
+        api_key = cluster_lib.resolve_gateway_token(repo_root=REPO_ROOT) or None
+
     resolved_node = resolve_node_name(node)
     yaml_text = render_continue_yaml(
         node=resolved_node,
@@ -259,6 +168,8 @@ def install_continue_for_ctx(ctx, os_tag, endpoint, node="auto", dry_run=False, 
         mcp_command=ctx["mcp_command"],
         mcp_args=ctx["mcp_args"],
         repo_str=ctx["repo_str"],
+        api_key=api_key,
+        include_all=False,
     )
     print(f"[{os_tag}:continue] install node={resolved_node} -> {cfg_path} (backup + schema v1 -> {endpoint.rstrip('/')}/v1)")
     if not dry_run:

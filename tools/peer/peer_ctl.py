@@ -72,17 +72,20 @@ def _is_healthy(base_url):
         return False
 
 
-def _discover_ssh_and_tailscale_peers():
+def _discover_ssh_and_tailscale_peers(cfg=None):
     """Parse ~/.ssh/config and tailscale status to auto-populate peer_url and ssh_target."""
     alias_map = {
         "rpi": "raspberrypi",
         "raspberrypi": "raspberrypi",
         "arduq": "arduq",
-        "hector-pc": "torre",
         "torre": "torre",
-        "hector-laptop": "portatil",
         "portatil": "portatil",
     }
+    custom_aliases = ((cfg or {}).get("peer") or {}).get("host_aliases") or {}
+    if isinstance(custom_aliases, dict):
+        for k, v in custom_aliases.items():
+            if k and v:
+                alias_map[str(k).strip().lower()] = str(v).strip()
     discovered = {}
     ssh_cfg = os.path.join(os.path.expanduser("~"), ".ssh", "config")
     if os.path.isfile(ssh_cfg):
@@ -147,14 +150,18 @@ def _discover_ssh_and_tailscale_peers():
 
 def cmd_init_token(cfg, sync_dir_override=""):
     ex_path = os.path.join(REPO_ROOT, "cluster.example.json")
-    ex = json.load(open(ex_path, encoding="utf-8")) if os.path.isfile(ex_path) else {}
+    ex = {}
+    if os.path.isfile(ex_path):
+        with open(ex_path, encoding="utf-8") as f:
+            ex = json.load(f)
     local_cfg_path = os.path.join(REPO_ROOT, "cluster.local.json")
     if not os.path.isfile(local_cfg_path):
         with open(local_cfg_path, "w", encoding="utf-8") as f:
             json.dump(ex, f, indent=2)
             f.write("\n")
 
-    raw = json.load(open(local_cfg_path, encoding="utf-8"))
+    with open(local_cfg_path, encoding="utf-8") as f:
+        raw = json.load(f)
     peer_sec = raw.setdefault("peer", {})
     peer_sec.setdefault("port", 1236)
     peer_sec.setdefault("default_mode", "auto")
@@ -188,24 +195,19 @@ def cmd_init_token(cfg, sync_dir_override=""):
         tok = secrets.token_hex(32)
     peer_sec["token"] = tok
 
-    if sync_dir:
-        try:
-            os.makedirs(sync_dir, exist_ok=True)
-            tok_file = os.path.join(sync_dir, "peer.token")
-            with open(tok_file, "w", encoding="utf-8") as f:
-                f.write(tok + "\n")
-            try:
-                os.chmod(tok_file, 0o600)
-            except OSError:
-                pass
-        except OSError:
-            pass
+    gw_sec = raw.setdefault("gateway", {})
+    gw_tok = str(gw_sec.get("token") or "").strip()
+    if not gw_tok or "<" in gw_tok:
+        gw_sec["token"] = secrets.token_hex(32)
+
+    # Security Decision 2: Never write plaintext peer.token to Google Drive sync_dir.
+    # Token lives exclusively in 0600 gitignored cluster.local.json.
 
     # Auto-populate peer_url and ssh_target from base_url, ~/.ssh/config, or Tailscale status
     port = int(peer_sec["port"])
     local_node = raw.get("local_node") or "torre"
     local_ts = peer_daemon.detect_local_tailscale_ip(raw)
-    discovered = _discover_ssh_and_tailscale_peers()
+    discovered = _discover_ssh_and_tailscale_peers(raw)
     for nname, nd in nodes_sec.items():
         disc = discovered.get(nname) or {}
         cur_ssh = (nd.get("ssh_target") or "").strip()
@@ -224,9 +226,19 @@ def cmd_init_token(cfg, sync_dir_override=""):
             if m:
                 nd["peer_url"] = f"http://{m.group(0)}:{port}"
 
-    with open(local_cfg_path, "w", encoding="utf-8") as f:
+    tmp_cfg = f"{local_cfg_path}.{os.getpid()}.tmp"
+    with open(tmp_cfg, "w", encoding="utf-8") as f:
         json.dump(raw, f, indent=2)
         f.write("\n")
+    try:
+        os.chmod(tmp_cfg, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp_cfg, local_cfg_path)
+    try:
+        os.chmod(local_cfg_path, 0o600)
+    except OSError:
+        pass
 
     return {"ok": True, "local_node": local_node, "sync_dir": sync_dir, "token_set": bool(tok), "peer_urls": {k: v.get("peer_url") for k, v in nodes_sec.items()}}
 
@@ -238,6 +250,7 @@ def cmd_start(cfg, wait_s=6.0):
 
     daemon_script = os.path.join(PEER_DIR, "peer_daemon.py")
     log_path = _log_file()
+    cluster_lib.rotate_log_if_needed(log_path)
     with open(log_path, "a", encoding="utf-8") as lf:
         proc = subprocess.Popen(
             [sys.executable, daemon_script, "--port", str(port), "--repo-root", REPO_ROOT],
@@ -258,17 +271,34 @@ def cmd_start(cfg, wait_s=6.0):
 
 
 def cmd_stop(cfg):
+    base_url, _ = _local_base(cfg)
     pid = None
     if os.path.isfile(_pid_file()):
         try:
-            pid = int(open(_pid_file(), "r", encoding="utf-8").read().strip())
+            with open(_pid_file(), "r", encoding="utf-8") as f:
+                pid = int(f.read().strip())
             os.kill(pid, signal.SIGTERM)
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except OSError:
+                    break
+                time.sleep(0.15)
+            try:
+                os.kill(pid, 0)
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
         except Exception:
             pass
         try:
             os.remove(_pid_file())
         except OSError:
             pass
+    deadline_port = time.monotonic() + 2.0
+    while time.monotonic() < deadline_port and _is_healthy(base_url):
+        time.sleep(0.15)
     return {"ok": True, "stopped_pid": pid}
 
 
@@ -384,7 +414,8 @@ def get_job_status(cfg, job_id, target_node=None):
     if sync_dir:
         cpath = os.path.join(sync_dir, "peer-queue", "completed", f"{job_id}.json")
         if os.path.isfile(cpath):
-            return {"ok": True, "transport": "drive_queue", "job": json.load(open(cpath, encoding="utf-8"))}
+            with open(cpath, encoding="utf-8") as f:
+                return {"ok": True, "transport": "drive_queue", "job": json.load(f)}
     return {"ok": False, "error": f"Job {job_id!r} not found"}
 
 
@@ -447,11 +478,15 @@ def cmd_install_autostart(dry_run=False):
                 f.write(vbs)
         return {"ok": True, "vbs": vbs_path}
 
+    cfg = cluster_lib.load_cluster_config(REPO_ROOT)
+    port = int(((cfg.get("peer") or {}).get("port") or 1236))
+    posix_daemon = cluster_lib.normalize_local_path(os.path.join(PEER_DIR, "peer_daemon.py"), "wsl")
+    posix_root = cluster_lib.normalize_local_path(REPO_ROOT, "wsl")
     unit_dir = os.path.join(os.path.expanduser("~"), ".config", "systemd", "user")
     unit_path = os.path.join(unit_dir, "cluster-peer-openclaw.service")
     unit = (
         "[Unit]\nDescription=Cluster Peer Order Daemon & OpenClaw HA\nAfter=network.target\n\n"
-        f"[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart={sys.executable} {posix_ctl} autostart-boot\n\n"
+        f"[Service]\nType=simple\nRestart=always\nRestartSec=3\nExecStart={sys.executable} {posix_daemon} --port {port} --repo-root {posix_root}\n\n"
         "[Install]\nWantedBy=default.target\n"
     )
     print(f"[peer-autostart] write {unit_path}")
@@ -497,7 +532,7 @@ def deploy_edge_node(cfg, target_node):
         return {"ok": False, "node": target_node, "error": f"Unknown node {target_node!r}"}
     ssh_target = (nd.get("ssh_target") or "").strip()
     if not ssh_target or "<" in ssh_target:
-        disc = _discover_ssh_and_tailscale_peers().get(target_node) or {}
+        disc = _discover_ssh_and_tailscale_peers(cfg).get(target_node) or {}
         ssh_target = disc.get("ssh_target") or target_node
 
     tok = openclaw_ctl.resolve_peer_token(cfg)
@@ -524,13 +559,17 @@ def deploy_edge_node(cfg, target_node):
         "nodes": nodes,
     }
 
+    def _read_txt(p):
+        with open(p, encoding="utf-8") as f:
+            return f.read()
+
     files_payload = {
-        "cluster.example.json": open(os.path.join(REPO_ROOT, "cluster.example.json"), encoding="utf-8").read(),
+        "cluster.example.json": _read_txt(os.path.join(REPO_ROOT, "cluster.example.json")),
         "cluster.local.json": json.dumps(edge_cfg, indent=2) + "\n",
-        "tools/cluster_lib.py": open(os.path.join(TOOLS_DIR, "cluster_lib.py"), encoding="utf-8").read(),
-        "tools/peer/openclaw_ctl.py": open(os.path.join(PEER_DIR, "openclaw_ctl.py"), encoding="utf-8").read(),
-        "tools/peer/peer_daemon.py": open(os.path.join(PEER_DIR, "peer_daemon.py"), encoding="utf-8").read(),
-        "tools/peer/peer_ctl.py": open(os.path.join(PEER_DIR, "peer_ctl.py"), encoding="utf-8").read(),
+        "tools/cluster_lib.py": _read_txt(os.path.join(TOOLS_DIR, "cluster_lib.py")),
+        "tools/peer/openclaw_ctl.py": _read_txt(os.path.join(PEER_DIR, "openclaw_ctl.py")),
+        "tools/peer/peer_daemon.py": _read_txt(os.path.join(PEER_DIR, "peer_daemon.py")),
+        "tools/peer/peer_ctl.py": _read_txt(os.path.join(PEER_DIR, "peer_ctl.py")),
     }
 
     remote_py = (

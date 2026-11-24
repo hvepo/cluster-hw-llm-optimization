@@ -17,9 +17,11 @@ Features:
   - Stateful `previous_response_id` session pinning and default-safe `/api/v1/models/load`
 """
 import argparse
+import hmac
 import http.client
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -34,271 +36,20 @@ REPO_ROOT = os.path.abspath(os.path.join(TOOLS_DIR, ".."))
 if TOOLS_DIR not in sys.path:
     sys.path.insert(0, TOOLS_DIR)
 
+import catalog  # noqa: E402
 import cluster_lib  # noqa: E402
 
-HEAVY_TORRE_MODELS = {
-    "t-code-chat",
-    "t-general-agent",
-    "t-vision-context",
-    "t-math-physics",
-    "t-deep-reasoning",
-}
+HEAVY_TORRE_MODELS = catalog.HEAVY_TORRE_MODELS
+DEFAULT_ALIAS_SPECS = catalog.DEFAULT_ALIAS_SPECS
+NIM_BASE_URL = catalog.NIM_BASE_URL
+NIM_HOST = catalog.NIM_HOST
+NIM_PORT = catalog.NIM_PORT
+NIM_ALIAS_SPECS = catalog.NIM_ALIAS_SPECS
+NIM_DIRECT_MODEL_IDS = catalog.NIM_DIRECT_MODEL_IDS
+GEMINI_ALIAS_SPECS = catalog.GEMINI_ALIAS_SPECS
+GEMINI_DIRECT_MODEL_IDS = catalog.GEMINI_DIRECT_MODEL_IDS
 
-DEFAULT_ALIAS_SPECS = {
-    "cluster/code": {
-        "candidates": ["p-code-moe", "t-code-chat"],
-        "tools": True,
-        "vision": False,
-        "thinking": None,
-        "description": "Smart-first coding (Laptop 30B-A3B MoE -> PC 14B fallback)",
-    },
-    "cluster/code-heavy": {
-        "candidates": ["p-code-moe", "t-code-chat"],
-        "tools": True,
-        "vision": False,
-        "thinking": None,
-        "description": "Heavy multi-file coding & refactoring (Laptop 30B-A3B MoE -> PC 14B)",
-    },
-    "cluster/code-fast": {
-        "candidates": ["t-code-chat", "p-code-moe"],
-        "tools": True,
-        "vision": False,
-        "thinking": None,
-        "description": "Low-latency interactive coding (PC 14B 72 tok/s -> Laptop 30B-A3B)",
-    },
-    "cluster/agent-heavy": {
-        "candidates": ["p-agent-moe-alt", "t-general-agent"],
-        "tools": True,
-        "vision": False,
-        "thinking": False,
-        "description": "Deep autonomous multi-step agent (Laptop 30B-A3B -> PC Qwen3-14B)",
-    },
-    "cluster/fast-agent": {
-        "candidates": ["t-fast-agent", "p-battery-chat"],
-        "tools": True,
-        "vision": False,
-        "thinking": False,
-        "description": "High-speed subagent & quick tasks (PC 8B 130 tok/s -> Laptop 4B)",
-    },
-    "cluster/vision": {
-        "candidates": ["t-vision-context", "p-agent-moe"],
-        "tools": True,
-        "vision": True,
-        "thinking": False,
-        "description": "Fast multimodal & OCR (PC Gemma-4-12B+MTP4 -> Laptop 26B+MTP3)",
-    },
-    "cluster/vision-heavy": {
-        "candidates": ["p-agent-moe", "t-vision-context"],
-        "tools": True,
-        "vision": True,
-        "thinking": False,
-        "description": "Long-context 32K multimodal & docs (Laptop 26B+MTP3 -> PC 12B+MTP4)",
-    },
-    "cluster/reasoning": {
-        "candidates": ["t-deep-reasoning", "p-agent-moe-alt"],
-        "tools": True,
-        "vision": False,
-        "thinking": True,
-        "description": "Chain-of-thought reasoning (PC R1-14B -> Laptop 30B-A3B)",
-    },
-    "cluster/math": {
-        "candidates": ["t-math-physics", "p-agent-moe-alt"],
-        "tools": False,
-        "vision": False,
-        "thinking": None,
-        "description": "Formal math & physics proofs (PC Phi-4 14B -> Laptop 30B-A3B)",
-    },
-    "cluster/autocomplete": {
-        "candidates": ["t-autocomplete-tab", "p-autocomplete-tab"],
-        "tools": False,
-        "vision": False,
-        "thinking": None,
-        "fim": True,
-        "local_first": True,
-        "anti_thrash": True,
-        "description": "IDE Tab FIM autocomplete (local-first; anti-thrash diverts when torre holds 12B-15B)",
-    },
-    "cluster/embed": {
-        "candidates": ["text-embedding-t-embed-index", "text-embedding-p-embed-index"],
-        "tools": False,
-        "vision": False,
-        "thinking": None,
-        "embedding": True,
-        "local_first": True,
-        "anti_thrash": True,
-        "description": "Codebase & RAG embeddings (local-first; anti-thrash diverts when torre holds 12B-15B)",
-    },
-}
-
-NIM_BASE_URL = "https://integrate.api.nvidia.com"
-NIM_HOST = "integrate.api.nvidia.com"
-NIM_PORT = 443
-
-NIM_ALIAS_SPECS = {
-    "nim/ultra": {
-        "candidates": ["nvidia/nemotron-3-ultra-550b-a55b"],
-        "cloud": "nvidia-nim",
-        "context_length": 131072,
-        "max_output_tokens": 16384,
-        "tools": True,
-        "vision": False,
-        "thinking": None,
-        "orchestrator": True,
-        "description": "NVIDIA NIM Flagship 550B-A55B MoE Cloud Orchestrator & Coder (0 local VRAM)",
-    },
-    "nim/fast": {
-        "candidates": ["nvidia/nemotron-3.5-lightning-30b-a3b"],
-        "cloud": "nvidia-nim",
-        "context_length": 131072,
-        "max_output_tokens": 8192,
-        "tools": True,
-        "vision": False,
-        "thinking": False,
-        "orchestrator": True,
-        "description": "NVIDIA NIM Ultra-Low-Latency 30B-A3B Lightning Cloud Agent & Orchestrator",
-    },
-    "nim/vision": {
-        "candidates": ["nvidia/nemotron-3.5-super-vl-120b-a12b"],
-        "cloud": "nvidia-nim",
-        "context_length": 131072,
-        "max_output_tokens": 8192,
-        "tools": True,
-        "vision": True,
-        "thinking": False,
-        "description": "NVIDIA NIM 120B-A12B Super-VL Multimodal Vision-Language Cloud Resource",
-    },
-    "nim/reasoning": {
-        "candidates": ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"],
-        "cloud": "nvidia-nim",
-        "context_length": 131072,
-        "max_output_tokens": 8192,
-        "tools": True,
-        "vision": False,
-        "thinking": True,
-        "description": "NVIDIA NIM 30B-A3B Chain-of-Thought Cloud Reasoning Resource",
-    },
-    "nim/code": {
-        "candidates": ["poolside/laguna-xs-2.1"],
-        "cloud": "nvidia-nim",
-        "context_length": 65536,
-        "max_output_tokens": 8192,
-        "tools": True,
-        "vision": False,
-        "thinking": None,
-        "description": "NVIDIA NIM Poolside Laguna-XS 2.1 Cloud Code Generation Resource",
-    },
-    "nim/mistral-large": {
-        "candidates": ["mistralai/mistral-large-4-1t-a52b"],
-        "cloud": "nvidia-nim",
-        "context_length": 131072,
-        "max_output_tokens": 16384,
-        "tools": True,
-        "vision": False,
-        "thinking": None,
-        "description": "NVIDIA NIM Mistral Large 4 (1T-A52B MoE) Frontier Cloud Resource",
-    },
-    "nim/kimi": {
-        "candidates": ["moonshotai/kimi-k3.1-pro"],
-        "cloud": "nvidia-nim",
-        "context_length": 131072,
-        "max_output_tokens": 16384,
-        "tools": True,
-        "vision": False,
-        "thinking": True,
-        "description": "NVIDIA NIM Moonshot Kimi K3.1 Pro Long-Context Reasoning & Coding",
-    },
-    "nim/step": {
-        "candidates": ["stepfun-ai/step-5-preview"],
-        "cloud": "nvidia-nim",
-        "context_length": 131072,
-        "max_output_tokens": 16384,
-        "tools": True,
-        "vision": False,
-        "thinking": True,
-        "description": "NVIDIA NIM StepFun Step-5 Preview Frontier Reasoning Resource",
-    },
-    "nim/glm-flash": {
-        "candidates": ["z-ai/glm-5.3-flash"],
-        "cloud": "nvidia-nim",
-        "context_length": 131072,
-        "max_output_tokens": 8192,
-        "tools": True,
-        "vision": False,
-        "thinking": False,
-        "description": "NVIDIA NIM GLM-5.3 Flash High-Speed Coding & Tool-Calling Resource",
-    },
-    "nim/minimax-flash": {
-        "candidates": ["minimaxai/minimax-m3.1-flash"],
-        "cloud": "nvidia-nim",
-        "context_length": 131072,
-        "max_output_tokens": 8192,
-        "tools": True,
-        "vision": False,
-        "thinking": False,
-        "description": "NVIDIA NIM MiniMax M3.1 Flash High-Speed Long-Context Assistant",
-    },
-    "nim/gemma-31b": {
-        "candidates": ["google/gemma-4-31b-it"],
-        "cloud": "nvidia-nim",
-        "context_length": 131072,
-        "max_output_tokens": 8192,
-        "tools": True,
-        "vision": False,
-        "thinking": False,
-        "description": "NVIDIA NIM Google Gemma-4 31B Dense Instruction & Code Resource",
-    },
-    "nim/embed": {
-        "candidates": ["nvidia/nemotron-3.5-embed-8b"],
-        "cloud": "nvidia-nim",
-        "context_length": 8192,
-        "max_output_tokens": 0,
-        "tools": False,
-        "vision": False,
-        "thinking": None,
-        "embedding": True,
-        "description": "NVIDIA NIM Nemotron-3.5 8B Cloud Semantic Embeddings",
-    },
-}
-
-NIM_DIRECT_MODEL_IDS = {spec["candidates"][0]: alias for alias, spec in NIM_ALIAS_SPECS.items()}
-
-GEMINI_ALIAS_SPECS = {
-    "gemini/orchestrator": {
-        "candidates": ["gemini-pro-orchestrator-neon"],
-        "cloud": "gemini-pro",
-        "context_length": 1000000,
-        "max_output_tokens": 65536,
-        "tools": True,
-        "vision": False,
-        "thinking": True,
-        "orchestrator": True,
-        "description": "Gemini Pro Flagship Autonomous Cloud Orchestrator (Antigravity subscription, 0 VRAM)",
-    },
-    "gemini/pro": {
-        "candidates": ["gemini-4-neon-medium"],
-        "cloud": "gemini-pro",
-        "context_length": 1000000,
-        "max_output_tokens": 65536,
-        "tools": True,
-        "vision": False,
-        "thinking": True,
-        "orchestrator": False,
-        "description": "Gemini Pro Flagship Architect, Code & Deep Reasoning (Antigravity subscription, 0 VRAM)",
-    },
-    "gemini/flash": {
-        "candidates": ["gemini-3.8-flash-medium"],
-        "cloud": "gemini-pro",
-        "context_length": 1000000,
-        "max_output_tokens": 65536,
-        "tools": True,
-        "vision": False,
-        "thinking": False,
-        "orchestrator": False,
-        "description": "Gemini Pro Fast Cloud Assistant & Edits (Antigravity subscription, 0 VRAM)",
-    },
-}
-
-GEMINI_DIRECT_MODEL_IDS = {spec["candidates"][0]: alias for alias, spec in GEMINI_ALIAS_SPECS.items()}
+_LOOPBACK_ORIGIN_RE = re.compile(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$", re.IGNORECASE)
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -328,7 +79,7 @@ def is_hidden_internal_model(model_key):
 class ClusterRouter:
     """Thread-safe cluster state cache, alias resolver, anti-thrash engine, and session pinner."""
 
-    def __init__(self, upstream_url="http://127.0.0.1:1234", repo_root=REPO_ROOT, cache_ttl=2.0):
+    def __init__(self, upstream_url="http://127.0.0.1:1234", repo_root=REPO_ROOT, cache_ttl=2.0, token=None, cors_origins=None):
         self.repo_root = os.path.abspath(repo_root)
         self.cfg = cluster_lib.load_cluster_config(self.repo_root)
         gw_cfg = self.cfg.get("gateway") or {}
@@ -339,16 +90,49 @@ class ClusterRouter:
         self.upstream_scheme = parsed.scheme or "http"
         self.local_node = self.cfg.get("local_node", "torre")
         self.cache_ttl = cache_ttl
+        self.token = token if token is not None else cluster_lib.resolve_gateway_token(self.cfg, repo_root=self.repo_root)
+        self.cors_origins = list(cors_origins if cors_origins is not None else (gw_cfg.get("cors_origins") or []))
+        self.code_profile = str(gw_cfg.get("code_profile") or "smart-first").strip().lower()
 
         self.best_cfg = cluster_lib.load_best_config(self.repo_root)
         self.tuned_models = self._build_tuned_model_index()
         self.alias_specs = self._build_alias_specs(gw_cfg.get("aliases") or {})
 
         self._lock = threading.Lock()
+        self._fetch_lock = threading.Lock()
         self._cache_time = 0.0
+        self._last_fail_time = 0.0
         self._cached_models = None
         self._pin_map = OrderedDict()  # response_id -> concrete_model
         self._cloud_sessions = OrderedDict()  # response_id -> {"model": str, "alias": str, "messages": list}
+        self._start_time = time.monotonic()
+        self._metrics = {
+            "requests_total": 0,
+            "errors_total": 0,
+            "requests_by_path": {},
+            "requests_by_alias": {},
+        }
+
+    def record_metric(self, path, alias="", status_code=200):
+        with self._lock:
+            self._metrics["requests_total"] += 1
+            if int(status_code) >= 400:
+                self._metrics["errors_total"] += 1
+            rbp = self._metrics["requests_by_path"]
+            rbp[path] = rbp.get(path, 0) + 1
+            if alias:
+                rba = self._metrics["requests_by_alias"]
+                rba[alias] = rba.get(alias, 0) + 1
+
+    def get_metrics(self):
+        with self._lock:
+            return {
+                "uptime_s": round(time.monotonic() - self._start_time, 1),
+                "requests_total": self._metrics["requests_total"],
+                "errors_total": self._metrics["errors_total"],
+                "requests_by_path": dict(self._metrics["requests_by_path"]),
+                "requests_by_alias": dict(self._metrics["requests_by_alias"]),
+            }
 
     def get_nvidia_api_key(self):
         return cluster_lib.resolve_nvidia_api_key(self.cfg)
@@ -398,6 +182,9 @@ class ClusterRouter:
 
     def _build_alias_specs(self, overrides):
         specs = {k: dict(v) for k, v in DEFAULT_ALIAS_SPECS.items()}
+        profile_cands = catalog.CODE_PROFILES.get(getattr(self, "code_profile", "smart-first"))
+        if profile_cands and "cluster/code" in specs:
+            specs["cluster/code"]["candidates"] = list(profile_cands)
         for k, v in NIM_ALIAS_SPECS.items():
             specs[k] = dict(v)
         for k, v in GEMINI_ALIAS_SPECS.items():
@@ -412,6 +199,7 @@ class ClusterRouter:
     def invalidate_cache(self):
         with self._lock:
             self._cache_time = 0.0
+            self._last_fail_time = 0.0
 
     def record_response_pin(self, response_id, concrete_model):
         if not response_id or not concrete_model:
@@ -436,30 +224,41 @@ class ClusterRouter:
         with self._lock:
             if not force and self._cached_models is not None and (now - self._cache_time) < self.cache_ttl:
                 return self._cached_models, True
-        conn = None
-        try:
-            cls = http.client.HTTPSConnection if self.upstream_scheme == "https" else http.client.HTTPConnection
-            conn = cls(self.upstream_host, self.upstream_port, timeout=4)
-            conn.request("GET", "/api/v1/models")
-            resp = conn.getresponse()
-            raw = resp.read()
-            if resp.status == 200:
-                data = json.loads(raw.decode("utf-8", "replace"))
-                models = data.get("models") or []
-                with self._lock:
-                    self._cached_models = models
-                    self._cache_time = time.monotonic()
-                return models, True
-        except Exception:
-            pass
-        finally:
-            if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-        with self._lock:
-            return (self._cached_models or []), False
+            if not force and self._last_fail_time > 0.0 and (now - self._last_fail_time) < 2.0:
+                return (self._cached_models or []), False
+        with self._fetch_lock:
+            now2 = time.monotonic()
+            with self._lock:
+                if not force and self._cached_models is not None and (now2 - self._cache_time) < self.cache_ttl:
+                    return self._cached_models, True
+                if not force and self._last_fail_time > 0.0 and (now2 - self._last_fail_time) < 2.0:
+                    return (self._cached_models or []), False
+            conn = None
+            try:
+                cls = http.client.HTTPSConnection if self.upstream_scheme == "https" else http.client.HTTPConnection
+                conn = cls(self.upstream_host, self.upstream_port, timeout=4)
+                conn.request("GET", "/api/v1/models")
+                resp = conn.getresponse()
+                raw = resp.read()
+                if resp.status == 200:
+                    data = json.loads(raw.decode("utf-8", "replace"))
+                    models = data.get("models") or []
+                    with self._lock:
+                        self._cached_models = models
+                        self._cache_time = time.monotonic()
+                        self._last_fail_time = 0.0
+                    return models, True
+            except Exception:
+                pass
+            finally:
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+            with self._lock:
+                self._last_fail_time = time.monotonic()
+                return (self._cached_models or []), False
 
     def snapshot_state(self, force=False):
         models, reachable = self._fetch_upstream_models(force=force)
@@ -555,9 +354,6 @@ class ClusterRouter:
         return False
 
     def resolve_model(self, requested_model, previous_response_id=None, state=None):
-        if state is None:
-            state = self.snapshot_state()
-
         if previous_response_id:
             cloud_sess = self.get_cloud_session(previous_response_id)
             if cloud_sess:
@@ -576,14 +372,13 @@ class ClusterRouter:
                     "spec": self.alias_specs.get(c_alias),
                 }
             pinned = self.get_pinned_model(previous_response_id)
-            if pinned and (pinned in state["by_key"] or not state["reachable"] or self.is_nim_model(pinned) or self.is_gemini_model(pinned)):
-                is_nim = self.is_nim_model(pinned)
+            if pinned and (self.is_nim_model(pinned) or self.is_gemini_model(pinned)):
                 is_gem = self.is_gemini_model(pinned)
-                cloud_kind = "gemini-pro" if is_gem else ("nvidia-nim" if is_nim else None)
+                cloud_kind = "gemini-pro" if is_gem else "nvidia-nim"
                 return {
                     "alias": requested_model if requested_model in self.alias_specs else "",
                     "resolved": pinned,
-                    "node": cloud_kind if cloud_kind else (self.node_for_model(pinned) or self.local_node),
+                    "node": cloud_kind,
                     "cloud": cloud_kind,
                     "diverted": False,
                     "pinned": True,
@@ -595,41 +390,22 @@ class ClusterRouter:
             if prefixed in self.alias_specs:
                 requested_model = prefixed
 
-        if requested_model in self.alias_specs:
+        # Cloud tier short-circuit: never probe local LM Studio upstream for nim/* or gemini/*
+        if requested_model in self.alias_specs and self.alias_specs[requested_model].get("cloud") in ("nvidia-nim", "gemini-pro"):
             spec = self.alias_specs[requested_model]
-            if spec.get("cloud") in ("nvidia-nim", "gemini-pro"):
-                cloud_kind = spec["cloud"]
-                chosen = spec["candidates"][0]
-                return {
-                    "alias": requested_model,
-                    "resolved": chosen,
-                    "node": cloud_kind,
-                    "cloud": cloud_kind,
-                    "diverted": False,
-                    "pinned": False,
-                    "spec": spec,
-                }
-            cands, diverted = self.ordered_candidates(requested_model, state)
-            chosen = None
-            for c in cands:
-                if c in state["by_key"]:
-                    chosen = c
-                    break
-            if chosen is None:
-                chosen = cands[0]
+            cloud_kind = spec["cloud"]
             return {
                 "alias": requested_model,
-                "resolved": chosen,
-                "node": self.node_for_model(chosen) or self.local_node,
-                "cloud": None,
-                "diverted": diverted,
+                "resolved": spec["candidates"][0],
+                "node": cloud_kind,
+                "cloud": cloud_kind,
+                "diverted": False,
                 "pinned": False,
                 "spec": spec,
             }
 
         if requested_model in NIM_DIRECT_MODEL_IDS:
             alias = NIM_DIRECT_MODEL_IDS[requested_model]
-            spec = self.alias_specs.get(alias)
             return {
                 "alias": alias,
                 "resolved": requested_model,
@@ -637,12 +413,11 @@ class ClusterRouter:
                 "cloud": "nvidia-nim",
                 "diverted": False,
                 "pinned": False,
-                "spec": spec,
+                "spec": self.alias_specs.get(alias),
             }
 
         if requested_model in GEMINI_DIRECT_MODEL_IDS:
             alias = GEMINI_DIRECT_MODEL_IDS[requested_model]
-            spec = self.alias_specs.get(alias)
             return {
                 "alias": alias,
                 "resolved": requested_model,
@@ -650,7 +425,7 @@ class ClusterRouter:
                 "cloud": "gemini-pro",
                 "diverted": False,
                 "pinned": False,
-                "spec": spec,
+                "spec": self.alias_specs.get(alias),
             }
 
         if requested_model.startswith("nim/") and requested_model.count("/") >= 2:
@@ -675,6 +450,42 @@ class ClusterRouter:
                 "diverted": False,
                 "pinned": False,
                 "spec": {"cloud": "gemini-pro", "tools": True, "vision": False, "context_length": 1000000, "max_output_tokens": 65536},
+            }
+
+        if state is None:
+            state = self.snapshot_state()
+
+        if previous_response_id:
+            pinned = self.get_pinned_model(previous_response_id)
+            if pinned and (pinned in state["by_key"] or not state["reachable"]):
+                return {
+                    "alias": requested_model if requested_model in self.alias_specs else "",
+                    "resolved": pinned,
+                    "node": self.node_for_model(pinned) or self.local_node,
+                    "cloud": None,
+                    "diverted": False,
+                    "pinned": True,
+                    "spec": self.alias_specs.get(requested_model),
+                }
+
+        if requested_model in self.alias_specs:
+            spec = self.alias_specs[requested_model]
+            cands, diverted = self.ordered_candidates(requested_model, state)
+            chosen = None
+            for c in cands:
+                if c in state["by_key"]:
+                    chosen = c
+                    break
+            if chosen is None:
+                chosen = cands[0]
+            return {
+                "alias": requested_model,
+                "resolved": chosen,
+                "node": self.node_for_model(chosen) or self.local_node,
+                "cloud": None,
+                "diverted": diverted,
+                "pinned": False,
+                "spec": spec,
             }
 
         return {
@@ -726,10 +537,13 @@ class ClusterRouter:
             "nvidia_nim_configured": has_nim,
             "gemini_pro_configured": has_gemini,
             "local_node": self.local_node,
+            "code_profile": self.code_profile,
+            "auth_required": True,
             "online_nodes": online_nodes,
             "loaded_by_node": state["loaded_by_node"],
             "torre_heavy_loaded": state["torre_heavy_loaded"],
             "pinned_sessions": pinned_count,
+            "metrics": self.get_metrics(),
             "aliases": aliases,
         }
 
@@ -971,6 +785,10 @@ def _scan_sse_line_for_pin(line_bytes, router, resolved_model):
         pass
 
 
+class _PayloadTooLargeError(ValueError):
+    pass
+
+
 class GatewayHTTPHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "ClusterGateway/1.0"
@@ -984,10 +802,53 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
     def router(self) -> ClusterRouter:
         return self.server.router  # type: ignore[attr-defined]
 
+    def _log_request(self, method, path, status, duration_ms, alias="", resolved="", node=""):
+        self.router.record_metric(path, alias=alias, status_code=status)
+        if os.environ.get("CLUSTER_GATEWAY_QUIET") == "1":
+            return
+        rec = {
+            "ts": round(time.time(), 3),
+            "method": method,
+            "path": path,
+            "status": status,
+            "duration_ms": round(duration_ms, 1),
+        }
+        if alias:
+            rec["alias"] = alias
+        if resolved:
+            rec["resolved"] = resolved
+        if node:
+            rec["node"] = node
+        try:
+            print(f"[gateway] {json.dumps(rec)}", file=sys.stderr, flush=True)
+        except Exception:
+            pass
+
     def _send_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = (self.headers.get("Origin") or "").strip()
+        allowed = self.router.cors_origins or []
+        if not origin or not allowed:
+            return
+        match = (origin in allowed) or ("loopback" in allowed and bool(_LOOPBACK_ORIGIN_RE.match(origin)))
+        if not match:
+            return
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key, Anthropic-Version")
+
+    def _check_auth(self):
+        expected = self.router.token
+        if not expected:
+            self._send_json(401, {"error": {"message": "Gateway token not configured", "type": "authentication_error"}})
+            return False
+        auth = (self.headers.get("Authorization") or "").strip()
+        x_key = (self.headers.get("X-Api-Key") or "").strip()
+        got = auth[7:].strip() if auth.lower().startswith("bearer ") else x_key
+        if not got or not hmac.compare_digest(got, expected):
+            self._send_json(401, {"error": {"message": "Unauthorized: invalid or missing gateway token", "type": "authentication_error"}})
+            return False
+        return True
 
     def _send_json(self, status_code, obj, extra_headers=None):
         raw = json.dumps(obj).encode("utf-8")
@@ -1005,9 +866,36 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
     MAX_BODY_BYTES = 10 * 1024 * 1024
 
     def _read_body(self):
+        te = (self.headers.get("Transfer-Encoding") or "").lower()
+        if "chunked" in te:
+            buf = bytearray()
+            while True:
+                size_line = self.rfile.readline(4096)
+                if not size_line:
+                    break
+                size_hex = size_line.split(b";", 1)[0].strip()
+                if not size_hex:
+                    continue
+                chunk_len = int(size_hex, 16)
+                if chunk_len == 0:
+                    while True:
+                        trailer = self.rfile.readline(4096)
+                        if not trailer or trailer in (b"\r\n", b"\n"):
+                            break
+                    break
+                if len(buf) + chunk_len > self.MAX_BODY_BYTES:
+                    raise _PayloadTooLargeError(f"Chunked request body exceeds {self.MAX_BODY_BYTES} bytes")
+                chunk = self.rfile.read(chunk_len)
+                buf.extend(chunk)
+                # consume trailing CRLF
+                crlf = self.rfile.read(2)
+                if crlf not in (b"\r\n", b"\n\r", b""):
+                    pass
+            return bytes(buf)
+
         length = int(self.headers.get("Content-Length") or "0")
         if length > self.MAX_BODY_BYTES:
-            raise ValueError(f"Request body too large ({length} bytes > {self.MAX_BODY_BYTES})")
+            raise _PayloadTooLargeError(f"Request body too large ({length} bytes > {self.MAX_BODY_BYTES})")
         return self.rfile.read(length) if length > 0 else b""
 
     def do_OPTIONS(self):
@@ -1017,6 +905,7 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        t0 = time.monotonic()
         path = urllib.parse.urlparse(self.path).path
         if path == "/health":
             state = self.router.snapshot_state()
@@ -1036,36 +925,60 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                     "online_nodes": online_nodes,
                 },
             )
+            self._log_request("GET", path, 200, (time.monotonic() - t0) * 1000.0)
             return
         if path == "/cluster/status":
             self._send_json(200, self.router.build_status_payload())
+            self._log_request("GET", path, 200, (time.monotonic() - t0) * 1000.0)
             return
         if path == "/v1/models":
             self._send_json(200, self.router.build_openai_models_payload())
+            self._log_request("GET", path, 200, (time.monotonic() - t0) * 1000.0)
             return
         if path == "/api/v1/models":
             self._send_json(200, self.router.build_lmstudio_v1_models_payload())
+            self._log_request("GET", path, 200, (time.monotonic() - t0) * 1000.0)
             return
         if path == "/api/v0/models":
             self._send_json(200, self.router.build_lmstudio_v0_models_payload())
+            self._log_request("GET", path, 200, (time.monotonic() - t0) * 1000.0)
             return
         if path.startswith("/api/v1/models/download/status/"):
             self._proxy_request("GET", self.path, b"", None)
+            self._log_request("GET", path, 200, (time.monotonic() - t0) * 1000.0)
             return
         self._send_json(404, {"error": {"message": f"Unknown GET path: {path}", "type": "not_found"}})
+        self._log_request("GET", path, 404, (time.monotonic() - t0) * 1000.0)
 
     def do_POST(self):
+        t0 = time.monotonic()
         path = urllib.parse.urlparse(self.path).path
-        raw_body = self._read_body()
+        if not self._check_auth():
+            self._log_request("POST", path, 401, (time.monotonic() - t0) * 1000.0)
+            return
+        try:
+            raw_body = self._read_body()
+        except _PayloadTooLargeError as exc:
+            self.close_connection = True
+            self._send_json(413, {"error": {"message": str(exc), "type": "payload_too_large"}})
+            self._log_request("POST", path, 413, (time.monotonic() - t0) * 1000.0)
+            return
+        except Exception as exc:
+            self._send_json(400, {"error": {"message": f"Invalid request body: {exc}", "type": "invalid_request"}})
+            self._log_request("POST", path, 400, (time.monotonic() - t0) * 1000.0)
+            return
 
         if path == "/api/v1/models/load":
             self._handle_models_load(raw_body)
+            self._log_request("POST", path, 200, (time.monotonic() - t0) * 1000.0)
             return
         if path == "/api/v1/models/unload":
             self._handle_models_unload(raw_body)
+            self._log_request("POST", path, 200, (time.monotonic() - t0) * 1000.0)
             return
         if path == "/api/v1/models/download":
             self._proxy_request("POST", self.path, raw_body, None)
+            self._log_request("POST", path, 200, (time.monotonic() - t0) * 1000.0)
             return
         if path in (
             "/v1/chat/completions",
@@ -1075,9 +988,10 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
             "/v1/messages",
             "/api/v1/chat",
         ):
-            self._handle_inference(path, raw_body)
+            self._handle_inference(path, raw_body, t0=t0)
             return
         self._send_json(404, {"error": {"message": f"Unknown POST path: {path}", "type": "not_found"}})
+        self._log_request("POST", path, 404, (time.monotonic() - t0) * 1000.0)
 
     def _handle_models_load(self, raw_body):
         try:
@@ -1092,16 +1006,30 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
 
         res = self.router.resolve_model(req_model)
         resolved = res["resolved"]
-        err_msg = self.router.validate_load_safety(resolved, body)
-        if err_msg:
-            self._send_json(400, {"error": {"message": err_msg, "type": "unsafe_vram_config"}})
-            return
-
         extra = {
             "X-Cluster-Alias": res["alias"],
             "X-Cluster-Resolved-Model": resolved,
             "X-Cluster-Node": res["node"],
         }
+        if res.get("cloud") in ("nvidia-nim", "gemini-pro"):
+            self._send_json(
+                200,
+                {
+                    "type": "llm",
+                    "instance_id": resolved,
+                    "status": "loaded",
+                    "cloud": res["cloud"],
+                    "noop": True,
+                },
+                extra_headers=extra,
+            )
+            return
+
+        err_msg = self.router.validate_load_safety(resolved, body)
+        if err_msg:
+            self._send_json(400, {"error": {"message": err_msg, "type": "unsafe_vram_config"}})
+            return
+
         override_keys = set(body.keys()) - {"model", "echo_load_config"}
         via_rest = os.environ.get("CLUSTER_GATEWAY_LOAD_VIA_REST") == "1"
 
@@ -1151,6 +1079,24 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": {"message": "Missing required field 'instance_id'", "type": "invalid_request", "param": "instance_id"}})
             return
 
+        if target in self.router.alias_specs and self.router.alias_specs[target].get("cloud") in ("nvidia-nim", "gemini-pro"):
+            spec = self.router.alias_specs[target]
+            resolved = spec["candidates"][0]
+            self._send_json(
+                200,
+                {"instance_id": resolved, "status": "unloaded", "cloud": spec["cloud"], "noop": True},
+                extra_headers={"X-Cluster-Alias": target, "X-Cluster-Resolved-Model": resolved, "X-Cluster-Node": spec["cloud"]},
+            )
+            return
+        if self.router.is_nim_model(target) or self.router.is_gemini_model(target):
+            cloud = "gemini-pro" if self.router.is_gemini_model(target) else "nvidia-nim"
+            self._send_json(
+                200,
+                {"instance_id": target, "status": "unloaded", "cloud": cloud, "noop": True},
+                extra_headers={"X-Cluster-Resolved-Model": target, "X-Cluster-Node": cloud},
+            )
+            return
+
         state = self.router.snapshot_state(force=True)
         resolved = target
         res = None
@@ -1169,31 +1115,37 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
 
         self._proxy_request("POST", "/api/v1/models/unload", json.dumps(body).encode("utf-8"), res, invalidate_after=True)
 
-    def _handle_inference(self, path, raw_body):
+    def _handle_inference(self, path, raw_body, t0=None):
+        t0 = t0 if t0 is not None else time.monotonic()
         try:
             body = json.loads(raw_body.decode("utf-8")) if raw_body.strip() else {}
         except Exception:
             self._send_json(400, {"error": {"message": "Invalid JSON body", "type": "invalid_request"}})
+            self._log_request("POST", path, 400, (time.monotonic() - t0) * 1000.0)
             return
 
         req_model = body.get("model")
         if not req_model:
             self._send_json(400, {"error": {"message": "Missing required field 'model'", "type": "invalid_request", "param": "model"}})
+            self._log_request("POST", path, 400, (time.monotonic() - t0) * 1000.0)
             return
 
         prev_id = body.get("previous_response_id")
         res = self.router.resolve_model(req_model, previous_response_id=prev_id)
         if res.get("cloud") == "nvidia-nim":
             self._handle_nim_inference(path, body, res, prev_id=prev_id)
+            self._log_request("POST", path, 200, (time.monotonic() - t0) * 1000.0, alias=res.get("alias") or req_model, resolved=res.get("resolved") or "", node="nvidia-nim")
             return
         if res.get("cloud") == "gemini-pro":
             self._handle_agy_inference(path, body, res, prev_id=prev_id)
+            self._log_request("POST", path, 200, (time.monotonic() - t0) * 1000.0, alias=res.get("alias") or req_model, resolved=res.get("resolved") or "", node="gemini-pro")
             return
         if prev_id and not res.get("pinned"):
             body.pop("previous_response_id", None)
         body["model"] = res["resolved"]
         _inject_defaults_for_alias(path, body, res)
         self._proxy_request("POST", self.path, json.dumps(body).encode("utf-8"), res)
+        self._log_request("POST", path, 200, (time.monotonic() - t0) * 1000.0, alias=res.get("alias") or req_model, resolved=res.get("resolved") or "", node=res.get("node") or "")
 
     def _handle_nim_inference(self, path, body, res, prev_id=None):
         nv_key = self.router.get_nvidia_api_key()
@@ -1215,8 +1167,8 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
             "X-Cluster-Node": "nvidia-nim",
         }
 
-        if path == "/api/v1/chat":
-            self._handle_nim_native_chat(body, res, nv_key, extra_headers, prev_id=prev_id)
+        if path in ("/api/v1/chat", "/v1/messages", "/v1/responses"):
+            self._handle_nim_translated_chat(path, body, res, nv_key, extra_headers, prev_id=prev_id)
             return
 
         target_path = path
@@ -1229,6 +1181,7 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
 
         raw_bytes = json.dumps(out_body).encode("utf-8")
         conn = None
+        headers_sent = False
         try:
             conn = http.client.HTTPSConnection(NIM_HOST, NIM_PORT, timeout=300)
             hdrs = {
@@ -1252,8 +1205,9 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                     if v:
                         self.send_header(k, v)
                 self.end_headers()
+                headers_sent = True
                 while True:
-                    line = up_resp.fp.readline(65536)
+                    line = up_resp.readline(65536)
                     if not line:
                         break
                     self.wfile.write(f"{len(line):x}\r\n".encode("ascii") + line + b"\r\n")
@@ -1270,11 +1224,13 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                     if v:
                         self.send_header(k, v)
                 self.end_headers()
+                headers_sent = True
                 if payload:
                     self.wfile.write(payload)
                     self.wfile.flush()
         except Exception as exc:
-            self._send_json(502, {"error": {"message": f"NVIDIA NIM upstream error: {exc}", "type": "bad_gateway"}}, extra_headers=extra_headers)
+            if not headers_sent:
+                self._send_json(502, {"error": {"message": f"NVIDIA NIM upstream error: {exc}", "type": "bad_gateway"}}, extra_headers=extra_headers)
         finally:
             if conn:
                 try:
@@ -1282,28 +1238,56 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-    def _handle_nim_native_chat(self, body, res, nv_key, extra_headers, prev_id=None):
-        """Translate LM Studio native /api/v1/chat requests into NVIDIA NIM /v1/chat/completions (JSON or SSE)."""
+    def _build_nim_oai_messages(self, path, body, prev_id=None):
         messages = []
         prior_sess = self.router.get_cloud_session(prev_id) if prev_id else None
         if prior_sess and prior_sess.get("messages"):
             messages.extend(prior_sess["messages"])
-        elif body.get("system_prompt"):
-            messages.append({"role": "system", "content": str(body["system_prompt"])})
 
-        inp = body.get("input")
-        if isinstance(inp, list):
-            for item in inp:
-                if isinstance(item, dict) and item.get("role") and item.get("content") is not None:
-                    messages.append({"role": item["role"], "content": item["content"]})
-                elif isinstance(item, str):
-                    messages.append({"role": "user", "content": item})
-        elif inp is not None:
-            messages.append({"role": "user", "content": str(inp)})
+        if path == "/api/v1/chat":
+            if not prior_sess and body.get("system_prompt"):
+                messages.append({"role": "system", "content": str(body["system_prompt"])})
+            inp = body.get("input")
+            if isinstance(inp, list):
+                for item in inp:
+                    if isinstance(item, dict) and item.get("role") and item.get("content") is not None:
+                        messages.append({"role": item["role"], "content": item["content"]})
+                    elif isinstance(item, str):
+                        messages.append({"role": "user", "content": item})
+            elif inp is not None:
+                messages.append({"role": "user", "content": str(inp)})
+        elif path == "/v1/responses":
+            if not prior_sess and body.get("instructions"):
+                messages.append({"role": "system", "content": str(body["instructions"])})
+            inp = body.get("input")
+            if isinstance(inp, list):
+                for item in inp:
+                    if isinstance(item, dict) and item.get("role") and item.get("content") is not None:
+                        messages.append({"role": item["role"], "content": _extract_content_text(item["content"])})
+                    elif isinstance(item, str):
+                        messages.append({"role": "user", "content": item})
+            elif inp is not None:
+                messages.append({"role": "user", "content": str(inp)})
+        elif path == "/v1/messages":
+            sys_txt = _extract_content_text(body.get("system")).strip() if body.get("system") else ""
+            if sys_txt and not prior_sess:
+                messages.append({"role": "system", "content": sys_txt})
+            for msg in body.get("messages") or []:
+                if not isinstance(msg, dict):
+                    continue
+                role = msg.get("role") or "user"
+                txt = _extract_content_text(msg.get("content"))
+                if txt:
+                    messages.append({"role": role, "content": txt})
+        return messages
 
+    def _handle_nim_translated_chat(self, path, body, res, nv_key, extra_headers, prev_id=None):
+        """Translate /api/v1/chat, /v1/messages, and /v1/responses into NVIDIA NIM /v1/chat/completions (JSON or SSE)."""
+        messages = self._build_nim_oai_messages(path, body, prev_id=prev_id)
         spec = res.get("spec") or {}
         max_out = int(body.get("max_output_tokens") or body.get("max_tokens") or spec.get("max_output_tokens") or 4096)
         stream = bool(body.get("stream"))
+        req_model_name = body.get("model") or res.get("alias") or res["resolved"]
         oai_payload = {
             "model": res["resolved"],
             "messages": messages,
@@ -1312,10 +1296,25 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
         }
         if "temperature" in body:
             oai_payload["temperature"] = body["temperature"]
+        if path == "/v1/messages" and isinstance(body.get("tools"), list) and body["tools"]:
+            oai_tools = []
+            for t in body["tools"]:
+                if isinstance(t, dict) and t.get("name"):
+                    oai_tools.append({
+                        "type": "function",
+                        "function": {
+                            "name": t["name"],
+                            "description": t.get("description") or "",
+                            "parameters": t.get("input_schema") or {"type": "object", "properties": {}},
+                        },
+                    })
+            if oai_tools:
+                oai_payload["tools"] = oai_tools
 
         raw_bytes = json.dumps(oai_payload).encode("utf-8")
         t0 = time.monotonic()
         conn = None
+        headers_sent = False
         try:
             conn = http.client.HTTPSConnection(NIM_HOST, NIM_PORT, timeout=300)
             hdrs = {
@@ -1332,6 +1331,7 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                 return
 
             rid = f"resp_nim_{int(time.time() * 1000)}_{os.urandom(3).hex()}"
+            msg_id = f"msg_nim_{int(time.time() * 1000)}_{os.urandom(3).hex()}"
             if stream:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
@@ -1342,17 +1342,24 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                     if v:
                         self.send_header(k, v)
                 self.end_headers()
+                headers_sent = True
 
                 def _write_sse(ev_name, data_obj):
                     chunk = f"event: {ev_name}\ndata: {json.dumps(data_obj)}\n\n".encode("utf-8")
                     self.wfile.write(f"{len(chunk):x}\r\n".encode("ascii") + chunk + b"\r\n")
                     self.wfile.flush()
 
+                if path == "/v1/messages":
+                    _write_sse("message_start", {"type": "message_start", "message": {"id": msg_id, "type": "message", "role": "assistant", "model": req_model_name, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})
+                    _write_sse("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+                elif path == "/v1/responses":
+                    _write_sse("response.created", {"type": "response.created", "response": {"id": rid, "object": "response", "model": req_model_name, "status": "in_progress"}})
+
                 text_parts = []
                 reason_parts = []
                 ttft = None
                 while True:
-                    raw_line = up_resp.fp.readline(65536)
+                    raw_line = up_resp.readline(65536)
                     if not raw_line:
                         break
                     s = raw_line.decode("utf-8", "replace").strip()
@@ -1375,15 +1382,25 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                         ttft = time.monotonic() - t0
                     if r_piece:
                         reason_parts.append(r_piece)
-                        _write_sse("reasoning.delta", {"type": "reasoning.delta", "content": r_piece})
+                        if path == "/api/v1/chat":
+                            _write_sse("reasoning.delta", {"type": "reasoning.delta", "content": r_piece})
                     if c_piece:
                         text_parts.append(c_piece)
-                        _write_sse("message.delta", {"type": "message.delta", "content": c_piece})
+                        if path == "/api/v1/chat":
+                            _write_sse("message.delta", {"type": "message.delta", "content": c_piece})
+                        elif path == "/v1/messages":
+                            _write_sse("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": c_piece}})
+                        elif path == "/v1/responses":
+                            _write_sse("response.output_text.delta", {"type": "response.output_text.delta", "delta": c_piece})
 
                 full_text = "".join(text_parts)
                 full_reason = "".join(reason_parts)
                 if not full_text and full_reason:
                     full_text = full_reason
+                    if path == "/v1/messages":
+                        _write_sse("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": full_text}})
+                    elif path == "/v1/responses":
+                        _write_sse("response.output_text.delta", {"type": "response.output_text.delta", "delta": full_text})
                 elapsed = max(0.001, time.monotonic() - t0)
                 approx_toks = max(1, len((full_text + full_reason).split()))
                 stats = {
@@ -1393,17 +1410,36 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                 if body.get("store", True):
                     new_msgs = list(messages) + [{"role": "assistant", "content": full_text}]
                     self.router.record_cloud_session(rid, res["resolved"], res.get("alias"), new_msgs)
-                _write_sse(
-                    "chat.end",
-                    {
-                        "type": "chat.end",
-                        "result": {
-                            "response_id": rid,
-                            "model_instance_id": res["resolved"],
-                            "stats": stats,
+
+                if path == "/v1/messages":
+                    _write_sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+                    _write_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": approx_toks}})
+                    _write_sse("message_stop", {"type": "message_stop"})
+                elif path == "/v1/responses":
+                    _write_sse("response.completed", {
+                        "type": "response.completed",
+                        "response": {
+                            "id": rid,
+                            "object": "response",
+                            "model": req_model_name,
+                            "status": "completed",
+                            "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": full_text}]}],
+                            "output_text": full_text,
+                            "usage": {"input_tokens": 0, "output_tokens": approx_toks, "total_tokens": approx_toks},
                         },
-                    },
-                )
+                    })
+                else:
+                    _write_sse(
+                        "chat.end",
+                        {
+                            "type": "chat.end",
+                            "result": {
+                                "response_id": rid,
+                                "model_instance_id": res["resolved"],
+                                "stats": stats,
+                            },
+                        },
+                    )
                 self.wfile.write(b"0\r\n\r\n")
                 self.wfile.flush()
                 return
@@ -1417,15 +1453,64 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
             if not content_txt and reason_txt:
                 content_txt = reason_txt
                 reason_txt = ""
+            usage = data.get("usage") or {}
+            in_toks = int(usage.get("prompt_tokens") or 0)
+            comp_toks = int(usage.get("completion_tokens") or max(1, len(content_txt.split())))
+            tot_toks = int(usage.get("total_tokens") or (in_toks + comp_toks))
+            if body.get("store", True):
+                new_msgs = list(messages) + [{"role": "assistant", "content": content_txt}]
+                self.router.record_cloud_session(rid, res["resolved"], res.get("alias"), new_msgs)
+
+            if path == "/v1/messages":
+                content_blocks = []
+                if reason_txt:
+                    content_blocks.append({"type": "thinking", "thinking": reason_txt})
+                if content_txt or not msg.get("tool_calls"):
+                    content_blocks.append({"type": "text", "text": content_txt})
+                stop_reason = "end_turn"
+                for tc in msg.get("tool_calls") or []:
+                    fn = tc.get("function") or {}
+                    try:
+                        t_inp = json.loads(fn.get("arguments") or "{}")
+                    except Exception:
+                        t_inp = {}
+                    content_blocks.append({"type": "tool_use", "id": tc.get("id") or "tool_1", "name": fn.get("name") or "", "input": t_inp})
+                    stop_reason = "tool_use"
+                self._send_json(
+                    200,
+                    {
+                        "id": msg_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "model": req_model_name,
+                        "content": content_blocks,
+                        "stop_reason": stop_reason,
+                        "usage": {"input_tokens": in_toks, "output_tokens": comp_toks},
+                    },
+                    extra_headers=extra_headers,
+                )
+                return
+
+            if path == "/v1/responses":
+                self._send_json(
+                    200,
+                    {
+                        "id": rid,
+                        "object": "response",
+                        "created_at": int(time.time()),
+                        "model": req_model_name,
+                        "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": content_txt}]}],
+                        "output_text": content_txt,
+                        "usage": {"input_tokens": in_toks, "output_tokens": comp_toks, "total_tokens": tot_toks},
+                    },
+                    extra_headers=extra_headers,
+                )
+                return
+
             out_items = []
             if reason_txt:
                 out_items.append({"type": "reasoning", "content": reason_txt})
             out_items.append({"type": "message", "content": content_txt})
-            usage = data.get("usage") or {}
-            comp_toks = int(usage.get("completion_tokens") or max(1, len(content_txt.split())))
-            if body.get("store", True):
-                new_msgs = list(messages) + [{"role": "assistant", "content": content_txt}]
-                self.router.record_cloud_session(rid, res["resolved"], res.get("alias"), new_msgs)
             self._send_json(
                 200,
                 {
@@ -1441,7 +1526,8 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                 extra_headers=extra_headers,
             )
         except Exception as exc:
-            self._send_json(502, {"error": {"message": f"NVIDIA NIM /api/v1/chat error: {exc}", "type": "bad_gateway"}}, extra_headers=extra_headers)
+            if not headers_sent:
+                self._send_json(502, {"error": {"message": f"NVIDIA NIM {path} error: {exc}", "type": "bad_gateway"}}, extra_headers=extra_headers)
         finally:
             if conn:
                 try:
@@ -1514,14 +1600,17 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
         stream = bool(body.get("stream"))
         timeout_s = max(30, min(600, int(body.get("timeout_s") or 300)))
         req_model_name = body.get("model") or res.get("alias") or res["resolved"]
+        is_orch = (
+            res.get("alias") == "gemini/orchestrator"
+            or res.get("resolved") == GEMINI_ALIAS_SPECS["gemini/orchestrator"]["candidates"][0]
+        )
+        mode_flags = ["--mode", "auto", "--dangerously-skip-permissions"] if is_orch else ["--mode", "plan"]
         argv = list(agy_cmd) + [
             "-p",
             prompt_text,
             "--model",
             res["resolved"],
-            "--mode",
-            "auto",
-            "--dangerously-skip-permissions",
+            *mode_flags,
             "--disable-slash-commands",
             "--output-format",
             "stream-json" if stream else "json",
@@ -1535,7 +1624,7 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
         t0 = time.monotonic()
 
         if stream:
-            self._handle_agy_stream(path, argv, work_cwd, body, res, req_model_name, extra_headers, t0)
+            self._handle_agy_stream(path, argv, work_cwd, body, res, req_model_name, extra_headers, t0, timeout_s=timeout_s)
             return
 
         try:
@@ -1650,7 +1739,7 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
             extra_headers=extra_headers,
         )
 
-    def _handle_agy_stream(self, path, argv, work_cwd, body, res, req_model_name, extra_headers, t0):
+    def _handle_agy_stream(self, path, argv, work_cwd, body, res, req_model_name, extra_headers, t0, timeout_s=300):
         proc = None
         try:
             proc = subprocess.Popen(
@@ -1668,6 +1757,34 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
             self._send_json(502, {"error": {"message": f"Gemini Pro agy stream launch failed: {exc}", "type": "bad_gateway"}}, extra_headers=extra_headers)
             return
 
+        stderr_buf = []
+
+        def _drain_stderr():
+            try:
+                assert proc.stderr is not None
+                for ln in proc.stderr:
+                    stderr_buf.append(ln)
+                    if len(stderr_buf) > 100:
+                        del stderr_buf[:50]
+            except Exception:
+                pass
+
+        stderr_thread = threading.Thread(target=_drain_stderr, daemon=True, name="agy-stderr-drain")
+        stderr_thread.start()
+
+        timed_out = threading.Event()
+
+        def _on_timeout():
+            timed_out.set()
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
+        timer = threading.Timer(float(timeout_s) + 15.0, _on_timeout)
+        timer.daemon = True
+        timer.start()
+
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -1679,8 +1796,12 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
         chat_id = f"chatcmpl_agy_{os.urandom(4).hex()}"
+        msg_id = f"msg_agy_{os.urandom(4).hex()}"
+        stream_rid = f"resp_agy_{int(time.time() * 1000)}_{os.urandom(3).hex()}"
         created_ts = int(time.time())
         is_native = (path == "/api/v1/chat")
+        is_anthropic = (path == "/v1/messages")
+        is_responses = (path == "/v1/responses")
         sent_role = False
         text_parts = []
         reason_parts = []
@@ -1700,12 +1821,35 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                 payload["usage"] = usage
             self._write_http_chunk(f"data: {json.dumps(payload)}\n\n".encode("utf-8"))
 
-        def _emit_native_ev(ev_name, data_obj):
+        def _emit_sse_ev(ev_name, data_obj):
             self._write_http_chunk(f"event: {ev_name}\ndata: {json.dumps(data_obj)}\n\n".encode("utf-8"))
 
+        def _emit_text_piece(piece):
+            nonlocal sent_role
+            if is_native:
+                _emit_sse_ev("message.delta", {"type": "message.delta", "content": piece})
+            elif is_anthropic:
+                _emit_sse_ev("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": piece}})
+            elif is_responses:
+                _emit_sse_ev("response.output_text.delta", {"type": "response.output_text.delta", "delta": piece})
+            else:
+                d = {"content": piece}
+                if not sent_role:
+                    d["role"] = "assistant"
+                    sent_role = True
+                _emit_oai_delta(d)
+
         try:
+            if is_anthropic:
+                _emit_sse_ev("message_start", {"type": "message_start", "message": {"id": msg_id, "type": "message", "role": "assistant", "model": req_model_name, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})
+                _emit_sse_ev("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+            elif is_responses:
+                _emit_sse_ev("response.created", {"type": "response.created", "response": {"id": stream_rid, "object": "response", "model": req_model_name, "status": "in_progress"}})
+
             assert proc.stdout is not None
             for raw_line in proc.stdout:
+                if timed_out.is_set():
+                    break
                 s = raw_line.strip()
                 if not s.startswith("{"):
                     continue
@@ -1727,8 +1871,8 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                     if r_delta:
                         reason_parts.append(r_delta)
                         if is_native:
-                            _emit_native_ev("reasoning.delta", {"type": "reasoning.delta", "content": r_delta})
-                        else:
+                            _emit_sse_ev("reasoning.delta", {"type": "reasoning.delta", "content": r_delta})
+                        elif not is_anthropic and not is_responses:
                             d = {"reasoning_content": r_delta}
                             if not sent_role:
                                 d["role"] = "assistant"
@@ -1736,14 +1880,7 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                             _emit_oai_delta(d)
                     if t_delta:
                         text_parts.append(t_delta)
-                        if is_native:
-                            _emit_native_ev("message.delta", {"type": "message.delta", "content": t_delta})
-                        else:
-                            d = {"content": t_delta}
-                            if not sent_role:
-                                d["role"] = "assistant"
-                                sent_role = True
-                            _emit_oai_delta(d)
+                        _emit_text_piece(t_delta)
                 elif ev_kind == "result":
                     result_obj = ev.get("result") or {}
                     if result_obj.get("conversation_id"):
@@ -1753,28 +1890,20 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
             final_resp = str(result_obj.get("response") or "")
             if not text_parts and final_resp:
                 text_parts.append(final_resp)
-                if is_native:
-                    _emit_native_ev("message.delta", {"type": "message.delta", "content": final_resp})
-                else:
-                    d = {"content": final_resp}
-                    if not sent_role:
-                        d["role"] = "assistant"
-                        sent_role = True
-                    _emit_oai_delta(d)
-            elif not text_parts and result_obj.get("status") == "ERROR":
-                err_txt = f"[Gemini Pro error: {result_obj.get('error') or 'unknown error'}]"
+                _emit_text_piece(final_resp)
+            elif not text_parts and (timed_out.is_set() or result_obj.get("status") == "ERROR"):
+                reason = f"timed out after {timeout_s}s" if timed_out.is_set() else (result_obj.get("error") or "".join(stderr_buf).strip() or "unknown error")
+                err_txt = f"[Gemini Pro error: {reason}]"
                 text_parts.append(err_txt)
-                if is_native:
-                    _emit_native_ev("message.delta", {"type": "message.delta", "content": err_txt})
-                else:
-                    _emit_oai_delta({"role": "assistant", "content": err_txt})
+                _emit_text_piece(err_txt)
 
+            full_text = "".join(text_parts)
             elapsed = max(0.001, time.monotonic() - t0)
             usage = result_obj.get("usage") or {}
             in_toks = int(usage.get("input_tokens") or 0)
-            out_toks = int(usage.get("output_tokens") or max(1, len("".join(text_parts).split())))
+            out_toks = int(usage.get("output_tokens") or max(1, len(full_text.split())))
             tot_toks = int(usage.get("total_tokens") or (in_toks + out_toks))
-            rid = f"resp_agy_{new_conv}" if new_conv else f"resp_agy_{int(time.time() * 1000)}_{os.urandom(3).hex()}"
+            rid = f"resp_agy_{new_conv}" if new_conv else stream_rid
 
             if body.get("store", True):
                 self.router.record_cloud_session(
@@ -1787,7 +1916,7 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                 )
 
             if is_native:
-                _emit_native_ev(
+                _emit_sse_ev(
                     "chat.end",
                     {
                         "type": "chat.end",
@@ -1802,6 +1931,23 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                         },
                     },
                 )
+            elif is_anthropic:
+                _emit_sse_ev("content_block_stop", {"type": "content_block_stop", "index": 0})
+                _emit_sse_ev("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": out_toks}})
+                _emit_sse_ev("message_stop", {"type": "message_stop"})
+            elif is_responses:
+                _emit_sse_ev("response.completed", {
+                    "type": "response.completed",
+                    "response": {
+                        "id": rid,
+                        "object": "response",
+                        "model": req_model_name,
+                        "status": "completed",
+                        "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": full_text}]}],
+                        "output_text": full_text,
+                        "usage": {"input_tokens": in_toks, "output_tokens": out_toks, "total_tokens": tot_toks},
+                    },
+                })
             else:
                 _emit_oai_delta({}, finish_reason="stop", usage={"prompt_tokens": in_toks, "completion_tokens": out_toks, "total_tokens": tot_toks})
                 self._write_http_chunk(b"data: [DONE]\n\n")
@@ -1814,15 +1960,18 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
         finally:
+            timer.cancel()
             if proc and proc.poll() is None:
                 try:
                     proc.terminate()
                 except Exception:
                     pass
+            stderr_thread.join(timeout=1.0)
 
     def _proxy_request(self, method, target_path, body_bytes, res, invalidate_after=False):
         cls = http.client.HTTPSConnection if self.router.upstream_scheme == "https" else http.client.HTTPConnection
         conn = None
+        headers_sent = False
         try:
             conn = cls(self.router.upstream_host, self.router.upstream_port, timeout=600)
             fwd_headers = {}
@@ -1857,9 +2006,10 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                     if v:
                         self.send_header(k, v)
                 self.end_headers()
+                headers_sent = True
 
                 while True:
-                    line = up_resp.fp.readline(65536)
+                    line = up_resp.readline(65536)
                     if not line:
                         break
                     if res and res.get("resolved"):
@@ -1886,6 +2036,7 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                     if v:
                         self.send_header(k, v)
                 self.end_headers()
+                headers_sent = True
                 if payload:
                     self.wfile.write(payload)
                     self.wfile.flush()
@@ -1894,7 +2045,8 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                 self.router.invalidate_cache()
         except Exception as exc:
             self.router.invalidate_cache()
-            self._send_json(502, {"error": {"message": f"Upstream LM Studio error: {exc}", "type": "bad_gateway"}})
+            if not headers_sent:
+                self._send_json(502, {"error": {"message": f"Upstream LM Studio error: {exc}", "type": "bad_gateway"}})
         finally:
             if conn:
                 try:
@@ -1920,9 +2072,19 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=int(os.environ.get("CLUSTER_GATEWAY_PORT") or gw_cfg.get("port") or 1235))
     ap.add_argument("--upstream", default=os.environ.get("CLUSTER_GATEWAY_UPSTREAM") or gw_cfg.get("upstream_url") or "http://127.0.0.1:1234")
     ap.add_argument("--repo-root", default=REPO_ROOT)
+    ap.add_argument("--log-file", default="")
     args = ap.parse_args(argv)
 
-    router = ClusterRouter(upstream_url=args.upstream, repo_root=args.repo_root)
+    log_fh = None
+    if args.log_file:
+        os.makedirs(os.path.dirname(os.path.abspath(args.log_file)), exist_ok=True)
+        cluster_lib.rotate_log_if_needed(args.log_file)
+        log_fh = open(args.log_file, "a", encoding="utf-8", buffering=1)
+        sys.stdout = log_fh
+        sys.stderr = log_fh
+
+    tok = cluster_lib.ensure_gateway_token(args.repo_root)
+    router = ClusterRouter(upstream_url=args.upstream, repo_root=args.repo_root, token=tok)
     srv = ClusterGatewayServer((args.host, args.port), router)
     print(f"[cluster-gateway] listening on http://{args.host}:{args.port} -> upstream {router.upstream_url} (local_node={router.local_node})", flush=True)
     try:
@@ -1931,6 +2093,11 @@ def main(argv=None):
         pass
     finally:
         srv.server_close()
+        if log_fh is not None:
+            try:
+                log_fh.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

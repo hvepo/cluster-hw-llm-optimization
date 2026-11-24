@@ -13,10 +13,10 @@ Local models are **opt-in** delegation targets — do not wake them for routine 
 
 - **MCP tools:** `cluster_models` (inspect live alias -> model/node mapping), `cluster_chat` (send prompts or continue stateful threads via `previous_response_id`), and `cluster_orchestrate` (autonomous multi-step tool-calling loop driven by NVIDIA NIM cloud models).
 - **Global subagents:** `cluster-coder`, `cluster-fast-agent`, `cluster-reasoning`, `cluster-vision`, `cluster-orchestrator`.
-- **OpenAI / Anthropic / LM Studio endpoints:** `http://127.0.0.1:1235` (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`, `/api/v1/chat`).
-- **Unified catalog:** `cluster/*` (local dual-GPU on `torre`/`portatil`) + `nim/*` (NVIDIA NIM cloud resources via `https://integrate.api.nvidia.com/v1`, requires the NVIDIA NIM API key at `~/.config/nvidia_api_key` or `NVIDIA_API_KEY`).
-- **Virtual role aliases:** `cluster/code`, `cluster/code-fast`, `cluster/agent-heavy`, `cluster/fast-agent`, `cluster/vision`, `cluster/vision-heavy`, `cluster/reasoning`, `cluster/math`, `cluster/autocomplete`, `cluster/embed`, plus the `nim/*` cloud aliases (`nim/ultra`, `nim/fast`, `nim/vision`, `nim/reasoning`, `nim/code`, `nim/mistral-large`, `nim/kimi`, `nim/step`, `nim/glm-flash`, `nim/minimax-flash`, `nim/gemma-31b`, `nim/embed`).
-- **Cloud orchestrators:** `nim/ultra` and `nim/fast` double as zero-VRAM autonomous tool-calling orchestrators — `cluster_orchestrate` (MCP) / `cluster-chat --orchestrate` (CLI) lets them plan and execute `peer_status`, `peer_exec`, `peer_send_order`, `peer_order_status`, `cluster_models`, `cluster_chat`, `hw_node_profile`, `node_llm_status`, `node_best_configs`, and `openclaw_control` across `torre`, `portatil`, `raspberrypi`, and `arduq` without waking local GPUs unless they delegate a sub-task to a `cluster/*` alias.
+- **OpenAI / Anthropic / LM Studio endpoints:** `http://127.0.0.1:1235` (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`, `/api/v1/chat`), authenticated on POST routes via `gateway.token` (`Bearer` / `X-Api-Key`), with strict CORS (no `*`).
+- **Unified 13-model catalog (`tools/catalog.py`):** `cluster/*` (local dual-GPU on `torre`/`portatil`) + `nim/*` (NVIDIA NIM cloud resources via `https://integrate.api.nvidia.com/v1`, requires `~/.config/nvidia_api_key` or `NVIDIA_API_KEY`) + `gemini/*` (Gemini Pro subscription via `agy` OAuth: `gemini/orchestrator` uses `--mode auto --dangerously-skip-permissions`; `gemini/pro` and `gemini/flash` default to read-only `--mode plan`).
+- **Virtual role aliases:** `cluster/code`, `cluster/code-fast`, `cluster/agent-heavy`, `cluster/fast-agent`, `cluster/vision`, `cluster/vision-heavy`, `cluster/reasoning`, `cluster/math`, `cluster/autocomplete`, `cluster/embed`, `nim/*` (`nim/ultra`, `nim/fast`, `nim/vision`, `nim/reasoning`, `nim/code`, etc.), and `gemini/*` (`gemini/orchestrator`, `gemini/pro`, `gemini/flash`).
+- **Cloud orchestrators:** `gemini/orchestrator`, `nim/ultra`, and `nim/fast` double as zero-VRAM autonomous orchestrators — `cluster_orchestrate` (MCP) / `cluster-chat --orchestrate` (CLI) drives `peer_status`, `peer_exec`, `peer_send_order`, `peer_order_status`, `cluster_models`, `cluster_chat`, `hw_node_profile`, `node_llm_status`, `node_best_configs`, and `openclaw_control` across `torre`, `portatil`, `raspberrypi`, and `arduq`.
 
 ## 2. Bidirectional Cross-OS Peer Bridge (`:1236` + Drive Queue)
 
@@ -31,12 +31,13 @@ Run commands or autonomous Antigravity orders across `torre` and `portatil` (WSL
   cluster-peer send --to torre --os auto --wait 120 "Inspect disk space and report"
   ```
 - **Default working directory:** Unless `cwd` is explicitly provided, remote commands and orders execute in `~` (project-independent).
-- **Offline resilience:** When a sibling node is offline over Tailscale `:1236`, orders automatically queue to `<sync_dir>/peer-queue/to_<node>/` via Google Drive.
+- **Offline & token security:** `peer.token` lives strictly in `0600` gitignored `cluster.local.json` (never in Google Drive); when a sibling node is offline over Tailscale `:1236`, orders queue as HMAC-SHA256 signed JSON files in `<sync_dir>/peer-queue/to_<node>/` (failed/unsigned files dead-letter to `peer-queue/failed/`).
 
 ## 3. Antigravity-First Telegram Responder (Active-Standby HA)
 
 - By default (`peer.openclaw.responder = "antigravity"`), the active HA leader polls Telegram via `telegram_agy_daemon.py` and routes DMs directly to Antigravity (`agy -p`) from `cwd=~` with full permissions and persistent per-chat `conversation_id`.
 - Only one node holds `<sync_dir>/openclaw-ha/leader.json` at a time (`torre` primary, `portatil` automatic standby failover).
+- Telegram `/takeover` (no argument) cleanly transfers active leadership to the sibling compute node (`torre` ↔ `portatil`); `/takeover <node>` transfers to the named compute node and rejects edge/unknown nodes.
 - **MCP & CLI controls:**
   - `openclaw_control(action="status" | "takeover" | "telegram_reply" | "sync_secrets")`
   - `cluster-telegram status` / `cluster-telegram takeover` / `cluster-telegram telegram-reply --message "..."`

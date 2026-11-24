@@ -7,8 +7,8 @@
 |  Ubuntu WSL / Linux: Antigravity, VS Code Remote, OpenCode, Claude Code |
 +--------------------+--------------------------+-------------------------+
                      |                          |
-        3 Skills / Rules / Hooks         Stdio MCP Server: cluster-hw-llm
-      (AGENTS.md, skills/, hooks/)       (7 HW & LLM Fine-Tuning Tools)
+         3 Skills / Rules / Hooks         Stdio MCP Server: cluster-hw-llm
+       (AGENTS.md, skills/, hooks/)       (15 Tools · 6 Resources · v1.4.0)
                      |                          |
                      +------------+-------------+
                                   |
@@ -39,5 +39,8 @@
    - `tools/llm/lmctl_bench.py` snapshots existing permanent LM Studio defaults before temporary A/B overrides and restores them automatically on unload.
    - All unloads respect node `model_prefixes` so benchmarking one node never unloads a sibling LM Link node.
 
-4. **Public-Safe Portability:**
+4. **Public-Safe Portability & Token Security:**
    - Tracked files contain **zero** personal hostnames, IPs, usernames, or hardware serials (`python3 scripts/doctor.py --all --check-privacy`).
+   - `tools/catalog.py` is the single source of truth for the 13-model catalog (`cluster/*`, `nim/*`, `gemini/*`).
+   - `:1235` Cluster Gateway enforces auto-generated `gateway.token` (`Bearer` / `X-Api-Key`) on all POST routes (`/v1/*`, `/api/v1/*`), omits wildcard CORS headers, and restricts `--mode auto --dangerously-skip-permissions` strictly to `gemini/orchestrator` (`gemini/pro` and `gemini/flash` default to read-only `--mode plan`).
+   - `:1236` Peer Bridge keeps `peer.token` exclusively in `0600` gitignored `cluster.local.json` (never stored in Google Drive); Google Drive carries only HMAC-SHA256 signed offline queues (`peer-queue/`) and HA lease mirrors (`openclaw-ha/leader.json`).

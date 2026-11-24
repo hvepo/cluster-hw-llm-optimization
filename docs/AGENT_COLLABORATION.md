@@ -13,8 +13,8 @@ flowchart TD
     Clients["Clients (Antigravity · VS Code Copilot/Continue · OpenCode · Antigravity SDK)"]
     PluginAgents["Plugin Custom Agents (cluster-coder · cluster-fast-agent · cluster-reasoning · cluster-vision · cluster-orchestrator)"]
     SkillsHooks["Skills & Safety Hooks (hw-node-profiler · llm-node-finetune · cluster-install-migrate · PreToolUse)"]
-    MCP["Stdio MCP Server: cluster-hw-llm (15 tools · 3 resources)"]
-    Gateway["Cluster Router Gateway: 127.0.0.1:1235 (5 protocols · cluster/* + nim/* aliases · anti-thrash · sticky state)"]
+    MCP["Stdio MCP Server: cluster-hw-llm (15 tools · 6 resources)"]
+    Gateway["Cluster Router Gateway: 127.0.0.1:1235 (5 protocols · gateway.token · 13-model catalog · anti-thrash)"]
     LMLink["LM Studio + LM Link: 127.0.0.1:1234"]
     Torre["torre (12 GiB RTX 3080 Ti CUDA)"]
     Portatil["portatil (24 GiB Intel Arc 140V Vulkan)"]
@@ -41,8 +41,8 @@ flowchart TD
 | **Plugin Custom Agents (5)** | Specialized local-cluster delegation (`cluster-coder`, `cluster-fast-agent`, `cluster-reasoning`, `cluster-vision`) + hybrid cloud+local orchestration (`cluster-orchestrator`) | Gather focused file context (`read_file`), delegate generation to `cluster/*` (or `nim/*` cloud aliases) via `cluster_chat`, orchestrate multi-node/multi-tool goals via `cluster_orchestrate` (`nim/ultra`, `nim/fast`), and keep follow-ups stateful via `previous_response_id` |
 | **Skills (3)** | Domain runbooks (`hw-node-profiler`, `llm-node-finetune`, `cluster-install-migrate`) | Teach the orchestrator two-phase hardware-first discipline, ceiling math, A/B sweep gates, and cross-OS sync |
 | **Safety Hooks (`hooks.json`)** | `SessionStart` + `PreToolUse` (`run_command` guard) | Inject active node/endpoint context on session start and block destructive LM Studio default overwrites or un-scoped `lms unload --all` |
-| **MCP Server (`cluster-hw-llm`)** | 15 tools + 3 resources across HW, tuning, gateway chat, and cloud orchestration | Exposes `hw_node_profile`, `hw_gpu_telemetry`, `hw_event_log_check`, `llm_compute_ceiling`, `node_llm_status`, `node_best_configs`, `node_llm_control`, `cluster_models`, `cluster_chat`, and `cluster_orchestrate` |
-| **Cluster Router Gateway (`:1235`)** | 5 API protocols, `cluster/*` + `nim/*` virtual routing, anti-thrash, sticky response state | Resolves virtual aliases to live `torre` / `portatil` models and NVIDIA NIM `nim/*` cloud models, fails over automatically, and pins stateful `previous_response_id` turns to the holding node |
+| **MCP Server (`cluster-hw-llm`)** | 15 tools + 6 resources across HW, tuning, gateway chat, peer bridge, and cloud orchestration | Concurrent worker-pool dispatch returning `isError: true` on tool failures across `hw_*`, `llm_*`, `node_*`, `cluster_*`, `peer_*`, and `openclaw_control` |
+| **Cluster Router Gateway (`:1235`)** | 5 API protocols, `gateway.token` auth, strict CORS, 13-model `cluster/*` + `nim/*` + `gemini/*` routing, anti-thrash | Resolves virtual aliases from `tools/catalog.py` to live `torre` / `portatil` models, NIM cloud, and `agy` OAuth (`--mode plan` for `gemini/pro` & `gemini/flash`; `--mode auto` for `gemini/orchestrator`) |
 
 ---
 

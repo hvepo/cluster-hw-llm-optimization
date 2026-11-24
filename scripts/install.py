@@ -9,6 +9,7 @@ Supports any combination of:
 import argparse
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -103,13 +104,26 @@ def load_json_safe(path, default=None):
     return {} if default is None else default
 
 
-def write_json_atomic(path, data, dry_run=False):
+def write_json_atomic(path, data, dry_run=False, mode=None):
     if dry_run:
         return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
+    if mode is not None:
+        try:
+            os.chmod(tmp, mode)
+        except OSError:
+            pass
+    os.replace(tmp, path)
+    if mode is not None:
+        try:
+            os.chmod(path, mode)
+        except OSError:
+            pass
 
 
 def sync_skills_dir(src_skills, dest_skills, dry_run=False):
@@ -321,8 +335,12 @@ def configure_cluster_local_json(node, node_explicit, torre_url, portatil_url, o
         cfg["nodes"].setdefault("torre", {})["base_url"] = torre_url
     if portatil_url:
         cfg["nodes"].setdefault("portatil", {})["base_url"] = portatil_url
+    gw_sec = cfg.setdefault("gateway", {})
+    gw_tok = str(gw_sec.get("token") or "").strip()
+    if not gw_tok or "<" in gw_tok:
+        gw_sec["token"] = secrets.token_hex(32)
     print(f"[config] {local_cfg_path} (local_node={active_node})")
-    write_json_atomic(local_cfg_path, cfg, dry_run=dry_run)
+    write_json_atomic(local_cfg_path, cfg, dry_run=dry_run, mode=0o600)
 
 
 def sync_workspace_mirrors(dry_run=False):

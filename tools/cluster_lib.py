@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Cross-OS configuration, LM Studio path resolution, and HTTP helpers for cluster-hw-llm-optimization."""
+import glob
 import json
 import os
 import platform
 import re
+import secrets
 import shutil
 import subprocess
+import time
 import urllib.error
 import urllib.request
 
@@ -197,9 +200,11 @@ def load_cluster_config(repo_root=None):
     root = find_repo_root(repo_root)
     ex_path = os.path.join(root, "cluster.example.json")
     loc_path = os.path.join(root, "cluster.local.json")
-    cfg = json.load(open(ex_path, encoding="utf-8"))
+    with open(ex_path, encoding="utf-8") as f:
+        cfg = json.load(f)
     if os.path.isfile(loc_path):
-        cfg = _deep_merge(cfg, json.load(open(loc_path, encoding="utf-8")))
+        with open(loc_path, encoding="utf-8") as f:
+            cfg = _deep_merge(cfg, json.load(f))
 
     # Environment variable overrides
     if os.environ.get("CLUSTER_LOCAL_NODE"):
@@ -358,7 +363,8 @@ def get_api_models(base_url, timeout=8):
 
 def load_best_config(repo_root=None):
     root = find_repo_root(repo_root)
-    return json.load(open(os.path.join(root, "profiles", "best-config.json"), encoding="utf-8"))
+    with open(os.path.join(root, "profiles", "best-config.json"), encoding="utf-8") as f:
+        return json.load(f)
 
 
 def _nvidia_key_paths(home_override=None):
@@ -392,7 +398,8 @@ def resolve_nvidia_api_key(cfg=None, home_override=None):
     for p in _nvidia_key_paths(home_override=home_override):
         if p and os.path.isfile(p):
             try:
-                val = open(p, "r", encoding="utf-8", errors="ignore").read().strip()
+                with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                    val = f.read().strip()
                 if val and "<" not in val:
                     return val
             except OSError:
@@ -416,7 +423,9 @@ def resolve_agy_cli_cmd(cfg=None):
     global _WIN_WSL_AGY_PROBE
     env_bin = (os.environ.get("CLUSTER_AGY_BIN") or "").strip()
     if env_bin:
-        return [env_bin]
+        if os.path.isfile(env_bin) or shutil.which(env_bin):
+            return [env_bin]
+        return None
 
     plat = detect_platform()
     if plat != "windows":
@@ -483,4 +492,119 @@ def write_nvidia_api_key(api_key, home_override=None):
         except OSError:
             continue
     return written
+
+
+def resolve_gateway_token(cfg=None, repo_root=None):
+    """Resolve the Cluster Gateway (:1235) Bearer/X-Api-Key token from env or cluster.local.json."""
+    env_tok = (os.environ.get("CLUSTER_GATEWAY_TOKEN") or "").strip()
+    if env_tok and "<" not in env_tok:
+        return env_tok
+    if cfg is None:
+        cfg = load_cluster_config(repo_root)
+    tok = str(((cfg.get("gateway") or {}).get("token") or "")).strip()
+    if tok and "<" not in tok:
+        return tok
+    return ""
+
+
+def ensure_gateway_token(repo_root=None):
+    """Return existing gateway token or generate + atomically persist a 256-bit token in cluster.local.json."""
+    env_tok = (os.environ.get("CLUSTER_GATEWAY_TOKEN") or "").strip()
+    if env_tok and "<" not in env_tok:
+        return env_tok
+    root = find_repo_root(repo_root)
+    ex_path = os.path.join(root, "cluster.example.json")
+    loc_path = os.path.join(root, "cluster.local.json")
+    raw = {}
+    if os.path.isfile(loc_path):
+        try:
+            with open(loc_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception:
+            raw = {}
+    elif os.path.isfile(ex_path):
+        try:
+            with open(ex_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception:
+            raw = {}
+    gw_sec = raw.setdefault("gateway", {})
+    existing = str(gw_sec.get("token") or "").strip()
+    if existing and "<" not in existing:
+        return existing
+    tok = secrets.token_hex(32)
+    gw_sec["token"] = tok
+    os.makedirs(os.path.dirname(loc_path), exist_ok=True)
+    tmp = f"{loc_path}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(raw, f, indent=2)
+        f.write("\n")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, loc_path)
+    try:
+        os.chmod(loc_path, 0o600)
+    except OSError:
+        pass
+    return tok
+
+
+def gateway_auth_headers(cfg=None, repo_root=None):
+    """Return HTTP auth header dict for calling the local Cluster Gateway (:1235)."""
+    tok = resolve_gateway_token(cfg=cfg, repo_root=repo_root)
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+
+def rotate_log_if_needed(path, max_bytes=5 * 1024 * 1024, keep=3):
+    """Rotate a log file when it exceeds max_bytes, keeping up to `keep` archives."""
+    try:
+        if not path or not os.path.isfile(path):
+            return False
+        if os.path.getsize(path) < int(max_bytes):
+            return False
+        for i in range(int(keep), 0, -1):
+            src = path if i == 1 else f"{path}.{i - 1}"
+            dst = f"{path}.{i}"
+            if os.path.isfile(src):
+                try:
+                    if os.path.isfile(dst) and i == int(keep):
+                        os.remove(dst)
+                    os.replace(src, dst)
+                except OSError:
+                    pass
+        return True
+    except OSError:
+        return False
+
+
+def prune_old_files(directory, pattern, max_age_days=14, max_count=200):
+    """Remove old files matching glob `pattern` in `directory` exceeding age or count limits."""
+    if not directory or not os.path.isdir(directory):
+        return 0
+    matches = glob.glob(os.path.join(directory, pattern))
+    if not matches:
+        return 0
+    now = time.time()
+    cutoff = now - float(max_age_days) * 86400.0 if max_age_days and max_age_days > 0 else None
+    entries = []
+    for p in matches:
+        try:
+            if os.path.isfile(p):
+                entries.append((os.path.getmtime(p), p))
+        except OSError:
+            continue
+    entries.sort(reverse=True)  # newest first
+    removed = 0
+    for idx, (mtime, p) in enumerate(entries):
+        over_count = max_count is not None and idx >= int(max_count)
+        over_age = cutoff is not None and mtime < cutoff
+        if over_count or over_age:
+            try:
+                os.remove(p)
+                removed += 1
+            except OSError:
+                pass
+    return removed
 

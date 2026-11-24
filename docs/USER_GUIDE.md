@@ -5,7 +5,7 @@ Your entire setup — **PC (`torre`)**, **Laptop (`portatil`)**, **Windows 11 + 
 Instead of picking raw per-machine models (`t-*`, `p-*`) or duplicating cloud providers, you pick by **role** across **3 tiers**:
 1. **Tier 1 (`cluster/*`) — Local Dual-GPU:** \$0, 100% private/offline; automatically routes to the best GPU at home and fails over seamlessly when you travel with only the laptop.
 2. **Tier 2 (`nim/*`) — NVIDIA NIM Cloud:** 0 local VRAM, OpenAI-native `tool_calls` for OpenCode/Continue edits and `cluster_orchestrate`.
-3. **Tier 3 (`gemini/*`) — Gemini Pro Subscription (`agy` OAuth bridge):** \$0 extra API billing, `1M` context, powered by your Gemini Pro subscription (`gemini/orchestrator`, `gemini/pro`, `gemini/flash`) with autonomous edit permissions (`--mode auto --dangerously-skip-permissions`).
+3. **Tier 3 (`gemini/*`) — Gemini Pro Subscription (`agy` OAuth bridge):** \$0 extra API billing, `1M` context, powered by your Gemini Pro subscription (`gemini/orchestrator` with autonomous `--mode auto --dangerously-skip-permissions`; `gemini/pro` and `gemini/flash` in safe read-only `--mode plan`).
 
 ---
 
@@ -32,7 +32,8 @@ Every IDE and chat client shows the **same 13 curated models** (`5` local dual-G
 > [!NOTE]
 > **How OpenCode & Continue display these:**
 > - **OpenCode:** Uses one `cluster` provider (`Cluster (Local + NIM + Gemini Pro)`), so the cloud entries appear as `cluster/nim/ultra`, `cluster/nim/fast`, ..., `cluster/gemini/orchestrator`, `cluster/gemini/pro`, `cluster/gemini/flash` alongside `cluster/code`, `cluster/fast-agent`, etc. Raw `lmstudio`, `ollama`, `opencode/*-free`, `nvidia`, and `sglang` providers are hidden automatically.
-> - **Gemini Pro runtime (`gemini/*`):** Routes behind `:1235` to your OAuth-authenticated Antigravity CLI (`~/.gemini/bin/agy`) with autonomous permissions (`--mode auto --dangerously-skip-permissions`), web search, and direct access to all `cluster-hw-llm` MCP tools. Note: OpenCode's own OpenAI `tool_calls` loop is driven directly by `cluster/*` and `nim/*`, while `gemini/orchestrator` runs Antigravity's native autonomous agent loop inside `agy` (and can also be invoked via MCP `cluster_orchestrate(model="gemini/orchestrator")`).
+> - **Gemini Pro runtime (`gemini/*`):** Routes behind `:1235` to your OAuth-authenticated Antigravity CLI (`~/.gemini/bin/agy`) with web search and MCP support; `gemini/orchestrator` runs with autonomous permissions (`--mode auto --dangerously-skip-permissions`), while `gemini/pro` and `gemini/flash` on `/v1/chat/completions` default to safe read-only `--mode plan`. Note: OpenCode's own OpenAI `tool_calls` loop is driven directly by `cluster/*` and `nim/*`, while `gemini/orchestrator` runs Antigravity's native autonomous agent loop inside `agy` (and can also be invoked via MCP `cluster_orchestrate(model="gemini/orchestrator")`).
+> - **Gateway authentication:** `:1235` enforces an auto-generated 256-bit `gateway.token` (`Authorization: Bearer` or `X-Api-Key`) on all POST routes (`/v1/*`, `/api/v1/*`) while keeping `GET /health` unauthenticated, with wildcard CORS disabled by default. `setup_clients.py` provisions this token automatically across OpenCode, VS Code, Continue, `env.sh`/`env.ps1`, and `openclaw.json`.
 > - **Continue (VS Code):** Also configures **2 silent background IDE helpers**: `cluster/autocomplete` (Tab FIM autocomplete) and `cluster/embed` (codebase `@codebase` embeddings).
 > - **Terminal / MCP power-users:** Extra gateway aliases (`cluster/code-fast`, `cluster/code-heavy`, `cluster/vision`, `nim/mistral-large`, `nim/kimi`, `nim/step`, etc.) still work directly on `:1235` and `cluster_chat` even though they are hidden from UI pickers to keep menus clutter-free.
 
@@ -150,7 +151,7 @@ When working without internet or on sensitive local-only code/data:
 - `/status` -> Shows active leader, session ID, and online status of `torre`, `portatil`, `raspberrypi`, and `arduq`.
 - `/new` -> Starts a fresh Antigravity conversation thread.
 - `/cancel` -> Aborts an in-flight turn immediately without blocking other commands.
-- `/takeover` -> Cleanly switches active Telegram leadership between `torre` and `portatil`.
+- `/takeover` -> Cleanly transfers active Telegram leadership to the sibling compute node (`torre` ↔ `portatil`), or `/takeover <node>` to target `torre` or `portatil` explicitly (rejects edge/unknown nodes).
 - `/login` -> Refreshes Antigravity CLI OAuth interactively right from Telegram if a session ever expires.
 
 ### Global `PATH` Commands (Usable in Any Directory)

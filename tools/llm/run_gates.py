@@ -80,8 +80,10 @@ def chat_stream(base_url, model, prompt, max_tokens=256, temperature=0.0, extra_
 
 
 def unload_node_prefix(cfg, node_name):
+    prefixes = tuple((cfg.get("nodes") or {}).get(node_name, {}).get("model_prefixes") or [])
+    if not prefixes:
+        return
     url = node_url(node_name, cfg)
-    prefixes = tuple(cfg["nodes"][node_name]["model_prefixes"])
     for m in get_api_models(url, timeout=10):
         k = m.get("key", "")
         if not k.startswith(prefixes):
@@ -176,7 +178,15 @@ def main():
     args = ap.parse_args()
     cfg = load_cluster_config()
 
-    targets = list(cfg.get("nodes", {}).keys()) if args.node in ("both", "all") else [args.node]
+    if args.node in ("both", "all"):
+        targets = [
+            n for n, nd in (cfg.get("nodes") or {}).items()
+            if not str((nd or {}).get("role") or "").startswith("edge-")
+            and (nd or {}).get("base_url")
+            and (nd or {}).get("model_prefixes")
+        ]
+    else:
+        targets = [args.node]
     all_res = {n: run_node_gates(cfg, n) for n in targets}
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:

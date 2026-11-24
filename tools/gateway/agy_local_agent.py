@@ -14,12 +14,21 @@ import sys
 async def _run_sdk(args):
     from google.antigravity import Agent, LocalOpenAIAgentConfig  # type: ignore
 
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir))
+    tools_dir = os.path.join(repo_root, "tools")
+    if tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
+    import cluster_lib  # noqa: E402
+
     ws = os.path.abspath(args.workspace)
+    gw_tok = cluster_lib.resolve_gateway_token(repo_root=repo_root)
     kwargs = {
         "model": args.model,
         "base_url": args.gateway.rstrip("/") + "/v1",
         "workspaces": [ws],
     }
+    if gw_tok:
+        kwargs["api_key"] = gw_tok
     if args.allow_edits:
         from google.antigravity.hooks import policy  # type: ignore
 

@@ -48,10 +48,12 @@ def stream_native_chat(
     if previous_response_id:
         payload["previous_response_id"] = previous_response_id
 
+    req_headers = {"Content-Type": "application/json"}
+    req_headers.update(cluster_lib.gateway_auth_headers(repo_root=REPO_ROOT))
     req = urllib.request.Request(
         gateway_url.rstrip("/") + "/api/v1/chat",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=req_headers,
         method="POST",
     )
 

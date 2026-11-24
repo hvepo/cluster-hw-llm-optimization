@@ -18,6 +18,7 @@ import time
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from cluster_lib import (  # noqa: E402
     api_request,
+    detect_platform,
     get_api_models,
     load_cluster_config,
     node_for_model,
@@ -26,8 +27,19 @@ from cluster_lib import (  # noqa: E402
     resolve_local_lmstudio_home,
 )
 
-BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".lmctl_backups")
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".lmctl_temp_configs.json")
+
+def _state_dir():
+    if detect_platform() == "windows":
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+    else:
+        base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    d = os.path.join(base, "cluster-llm")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+BACKUP_DIR = os.path.join(_state_dir(), "lmctl_backups")
+STATE_FILE = os.path.join(_state_dir(), "lmctl_temp_configs.json")
 
 
 def parse_bool(val):
@@ -135,10 +147,12 @@ def restore_temp_cfgs(default_cfg_root):
 
 
 def unload_node(cfg, node_name, drain_s=2.0):
+    prefixes = tuple((cfg.get("nodes") or {}).get(node_name, {}).get("model_prefixes") or [])
+    if not prefixes:
+        return
     if drain_s > 0:
         time.sleep(drain_s)
     url = node_url(node_name, cfg)
-    prefixes = tuple(cfg["nodes"][node_name]["model_prefixes"])
     for m in get_api_models(url, timeout=10):
         k = m.get("key", "")
         if not k.startswith(prefixes):
@@ -157,8 +171,8 @@ def cmd_load(args, cfg):
     owner = args.node or node_for_model(args.model_key, cfg) or cfg.get("local_node", "torre")
     local_node = cfg.get("local_node", "torre")
     url = node_url(owner, cfg)
-    prefixes = tuple(cfg["nodes"][owner]["model_prefixes"])
-    if not args.model_key.startswith(prefixes):
+    prefixes = tuple((cfg.get("nodes") or {}).get(owner, {}).get("model_prefixes") or [])
+    if not prefixes or not args.model_key.startswith(prefixes):
         raise ValueError(f"Refusing to load {args.model_key!r}: expected prefixes {prefixes} for node {owner!r}")
 
     if not args.keep_loaded:
@@ -299,9 +313,9 @@ def main():
     cfg = load_cluster_config()
     if args.cmd == "status":
         url = node_url(args.node, cfg)
-        prefixes = tuple(cfg["nodes"][args.node]["model_prefixes"])
+        prefixes = tuple((cfg.get("nodes") or {}).get(args.node, {}).get("model_prefixes") or [])
         models = get_api_models(url)
-        loaded = [(m["key"], inst) for m in models if m["key"].startswith(prefixes) for inst in (m.get("loaded_instances") or [])]
+        loaded = [(m["key"], inst) for m in models if (not prefixes or m["key"].startswith(prefixes)) for inst in (m.get("loaded_instances") or [])]
         print(f"Node={args.node} ({url}) loaded={len(loaded)}")
         for k, inst in loaded:
             print(f"  {k}: {json.dumps(inst.get('config'))}")

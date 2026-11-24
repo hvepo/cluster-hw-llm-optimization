@@ -25,6 +25,7 @@ from cluster_lib import (  # noqa: E402
     detect_platform,
     load_cluster_config,
     node_url,
+    resolve_host_binary,
     resolve_lms_cli,
     resolve_win_python,
 )
@@ -33,7 +34,8 @@ from gpu_oc_verify import SmiSampler, load_torre_default, unload_torre  # noqa: 
 
 def to_win_path(path):
     if detect_platform() == "wsl":
-        return subprocess.check_output(["wslpath", "-w", path], text=True).strip()
+        wslpath_bin = resolve_host_binary("wslpath")
+        return subprocess.check_output([wslpath_bin, "-w", path], stdin=subprocess.DEVNULL, text=True).strip()
     return path
 
 
@@ -47,7 +49,8 @@ def check_events(since_iso):
         "Write-Host ('Matching events: ' + $ev.Count); "
         "$ev | Select-Object TimeCreated,Id,LevelDisplayName,ProviderName | Format-Table -AutoSize; exit 0"
     )
-    r = subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps], stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=30)
+    ps_bin = resolve_host_binary("powershell.exe")
+    r = subprocess.run([ps_bin, "-NoProfile", "-Command", ps], stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=30)
     out = (r.stdout or "") + (r.stderr or "")
     cnt = None
     for line in out.splitlines():
@@ -132,10 +135,14 @@ def run_combined_stage(label, cfg, node, lms_cli, win_py, win_script, win_log, s
 
 
 def main():
+    phys_cores = max(1, (os.cpu_count() or 4) // 2)
+    def_cores = ",".join(str(c) for c in (3, 0, 1, 5) if c < phys_cores) or "0"
+    def_ccd1 = ",".join(str(c) for c in range(8, min(16, phys_cores))) or def_cores
+
     ap = argparse.ArgumentParser(description="Combined Per-Core CPU CO + GPU/LLM Transient Stress Suite")
     ap.add_argument("--node", help="Target cluster node (defaults to local_node)")
-    ap.add_argument("--cores", default="3,0,1,5", help="Comma-separated physical cores for Stage 1 & 3a")
-    ap.add_argument("--ccd1-cores", default="8,9,10,11,12,13,14,15", help="Cores for Stage 3b")
+    ap.add_argument("--cores", default=def_cores, help="Comma-separated physical cores for Stage 1 & 3a")
+    ap.add_argument("--ccd1-cores", default=def_ccd1, help="Cores for Stage 3b")
     ap.add_argument("--cycles", type=int, default=3)
     ap.add_argument("--skip-stage2", action="store_true")
     args = ap.parse_args()

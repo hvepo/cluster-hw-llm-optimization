@@ -33,6 +33,11 @@ import cluster_lib  # noqa: E402
 import openclaw_ctl  # noqa: E402
 
 _TAILSCALE_IP_RE = re.compile(r"\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b")
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+
+
+def is_valid_job_id(job_id):
+    return bool(job_id and isinstance(job_id, str) and _JOB_ID_RE.fullmatch(job_id) and ".." not in job_id)
 
 
 def detect_local_tailscale_ip(cfg=None):
@@ -98,7 +103,7 @@ def sign_queue_payload(payload, token):
 
 def verify_queue_payload(payload, token):
     if not token:
-        return True
+        return False
     got = str(payload.get("hmac_sha256") or "").strip()
     if not got:
         return False
@@ -124,6 +129,8 @@ class PeerRuntime:
         self._stop_event = threading.Event()
 
     def _save_job(self, job):
+        if not is_valid_job_id(job.get("job_id")):
+            raise ValueError(f"Invalid job_id: {job.get('job_id')!r}")
         with self._jobs_lock:
             self._jobs[job["job_id"]] = dict(job)
         jpath = os.path.join(self.jobs_dir, f"{job['job_id']}.json")
@@ -145,16 +152,20 @@ class PeerRuntime:
                 pass
 
     def get_job(self, job_id):
+        if not is_valid_job_id(job_id):
+            return None
         with self._jobs_lock:
             if job_id in self._jobs:
                 return dict(self._jobs[job_id])
         jpath = os.path.join(self.jobs_dir, f"{job_id}.json")
         if os.path.isfile(jpath):
-            return json.load(open(jpath, encoding="utf-8"))
+            with open(jpath, encoding="utf-8") as f:
+                return json.load(f)
         if self.sync_dir:
             cpath = os.path.join(self.sync_dir, "peer-queue", "completed", f"{job_id}.json")
             if os.path.isfile(cpath):
-                return json.load(open(cpath, encoding="utf-8"))
+                with open(cpath, encoding="utf-8") as f:
+                    return json.load(f)
         return None
 
     def list_jobs(self, limit=25):
@@ -167,7 +178,8 @@ class PeerRuntime:
             )
             for p in files[:limit]:
                 try:
-                    items.append(json.load(open(p, encoding="utf-8")))
+                    with open(p, encoding="utf-8") as f:
+                        items.append(json.load(f))
                 except Exception:
                     pass
         return items
@@ -297,7 +309,10 @@ class PeerRuntime:
             self._save_job(job)
 
     def submit_job(self, kind, payload, transport="http", wait_s=0.0):
-        job_id = payload.get("job_id") or f"job_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+        req_jid = payload.get("job_id")
+        if req_jid is not None and not is_valid_job_id(req_jid):
+            raise ValueError(f"Invalid job_id: {req_jid!r}")
+        job_id = req_jid or f"job_{int(time.time())}_{uuid.uuid4().hex[:8]}"
         job = {
             "job_id": job_id,
             "kind": kind,
@@ -307,6 +322,7 @@ class PeerRuntime:
             "created_at": time.time(),
             **{k: v for k, v in payload.items() if k != "job_id"},
         }
+        cluster_lib.prune_old_files(self.jobs_dir, "*.json", max_age_days=14, max_count=200)
         self._save_job(job)
         fn = self._run_order_job if kind == "order" else self._run_exec_job
         fut = self._executor.submit(fn, job)
@@ -317,6 +333,21 @@ class PeerRuntime:
                 pass
             return self.get_job(job_id) or job
         return job
+
+    def _dead_letter(self, claimed_path, filename, reason):
+        failed_dir = os.path.join(self.sync_dir, "peer-queue", "failed")
+        try:
+            os.makedirs(failed_dir, exist_ok=True)
+            dst = os.path.join(failed_dir, filename)
+            os.replace(claimed_path, dst)
+            err_path = os.path.join(failed_dir, f"{filename}.error.txt")
+            with open(err_path, "w", encoding="utf-8") as ef:
+                ef.write(f"{time.time()}: {reason}\n")
+        except OSError:
+            try:
+                os.remove(claimed_path)
+            except OSError:
+                pass
 
     def poll_offline_queue_once(self):
         if not self.sync_dir:
@@ -335,21 +366,24 @@ class PeerRuntime:
             except OSError:
                 continue
             try:
-                payload = json.load(open(claimed, encoding="utf-8"))
-                if self.token and not verify_queue_payload(payload, self.token):
-                    print(f"[peer-daemon] rejected unsigned/tampered offline queue file: {fn}", file=sys.stderr)
+                with open(claimed, encoding="utf-8") as f:
+                    payload = json.load(f)
+                if not self.token or not verify_queue_payload(payload, self.token):
+                    reason = "missing peer token (fail-closed)" if not self.token else "invalid or missing hmac_sha256 signature"
+                    print(f"[peer-daemon] rejected offline queue file {fn}: {reason}", file=sys.stderr)
+                    self._dead_letter(claimed, fn, reason)
                     continue
                 payload.pop("hmac_sha256", None)
                 kind = payload.pop("kind", "order")
                 self.submit_job(kind, payload, transport="drive_queue", wait_s=0.0)
                 processed += 1
-            except Exception:
-                pass
-            finally:
                 try:
                     os.remove(claimed)
                 except OSError:
                     pass
+            except Exception as exc:
+                print(f"[peer-daemon] failed offline queue file {fn}: {exc}", file=sys.stderr)
+                self._dead_letter(claimed, fn, str(exc))
         return processed
 
     def start_queue_poller(self, interval_s=3.0):
@@ -446,6 +480,9 @@ def make_handler(runtime: PeerRuntime):
                 return
             if path.startswith("/jobs/"):
                 jid = path[len("/jobs/"):].strip("/")
+                if not is_valid_job_id(jid):
+                    self._send_json(400, {"ok": False, "error": f"Invalid job_id {jid!r}"})
+                    return
                 job = runtime.get_job(jid)
                 if not job:
                     self._send_json(404, {"ok": False, "error": f"Job {jid!r} not found"})

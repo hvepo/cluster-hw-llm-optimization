@@ -12,9 +12,12 @@ The **Cluster Router Gateway** ([cluster_gateway.py](../tools/gateway/cluster_ga
    - Legacy LM Studio API (`/api/v0/models`)
 2. **Option B Smart-First Virtual Role Aliases (`cluster/*`) + Automatic Failover:**
    - Both computers online -> true dual-GPU split; either computer asleep/away -> seamless automatic failover to the online machine.
-3. **NVIDIA NIM Cloud Aliases (`nim/*`) + Zero-VRAM Cloud Orchestrators:**
-   - When the NVIDIA NIM API key is present, the gateway proxies NVIDIA NIM models (`nim/ultra`, `nim/fast`, `nim/vision`, `nim/reasoning`, `nim/code`, `nim/mistral-large`, `nim/kimi`, `nim/step`, `nim/glm-flash`, `nim/minimax-flash`, `nim/gemma-31b`, `nim/embed`) over `https://integrate.api.nvidia.com/v1` as ordinary chat/agent models, and `nim/ultra`/`nim/fast` also act as autonomous tool-calling orchestrators (`cluster_orchestrate`).
-4. **Anti-Thrash VRAM Guardrails:**
+3. **NVIDIA NIM (`nim/*`) & Gemini Pro (`gemini/*`) Cloud Tiers (13-Model Catalog via `tools/catalog.py`):**
+   - When the NVIDIA NIM API key is present, the gateway translates and proxies `nim/*` across `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, `/api/v1/chat`, and `/v1/embeddings`, and `nim/ultra`/`nim/fast` double as autonomous tool-calling orchestrators (`cluster_orchestrate`).
+   - When Antigravity CLI (`agy`) is authenticated, `gemini/orchestrator`, `gemini/pro`, and `gemini/flash` run with zero local VRAM; `gemini/pro` and `gemini/flash` default to safe read-only `--mode plan`, while `--mode auto --dangerously-skip-permissions` is restricted strictly to `gemini/orchestrator`.
+4. **Gateway Auth (`gateway.token`) & Strict CORS:**
+   - All POST routes (`/v1/*`, `/api/v1/*`) require `Authorization: Bearer <gateway.token>` or `X-Api-Key: <gateway.token>` (auto-generated into gitignored `cluster.local.json` and auto-provisioned into clients by `setup_clients.py`), while `GET /health` remains unauthenticated. Wildcard `Access-Control-Allow-Origin: *` is disabled by default.
+5. **Anti-Thrash VRAM Guardrails:**
    - If `torre` currently holds a heavy `12B–15B` model, `cluster/autocomplete` and `cluster/embed` automatically divert to `portatil` instead of triggering LM Studio's `unloadPreviousJITModelOnLoad` eviction.
 
 ---
@@ -84,28 +87,27 @@ python3 tools/gateway/gateway_ctl.py status
 ## Per-Client Integration Guide
 
 ### 1. OpenCode (`v2.3.2+`, WSL & Windows)
-`setup_clients.py` registers provider **`cluster`** (`@ai-sdk/openai-compatible` -> `http://127.0.0.1:1235/v1`) in `opencode.json` — unified catalog of `cluster/*` local aliases plus `nim/*` cloud aliases when the NVIDIA NIM key is present. When the key exists, it also registers provider **`nvidia-nim`** (`https://integrate.api.nvidia.com/v1`) so `opencode run --model nim/ultra "Explain this module"` works with zero local VRAM, and selecting `nim/ultra`/`nim/fast` in any chat/agent gives it the `cluster-hw-llm` MCP tools (see Section 7).
+`setup_clients.py` registers provider **`cluster`** (`@ai-sdk/openai-compatible` -> `http://127.0.0.1:1235/v1` with `gateway.token`) in `opencode.json` — the 13-model catalog (`5` `cluster/*` local aliases + `5` `nim/*` cloud aliases when NVIDIA NIM key is present + `3` `gemini/*` aliases when `agy` is configured). Selecting `nim/ultra`, `nim/fast`, or `gemini/orchestrator` gives access to `cluster-hw-llm` MCP tools (see Section 7).
 ```bash
 opencode models
 opencode run --model cluster/code "Explain this module"
-# Or pick inside the TUI with /models -> Local Cluster (Torre + Portatil)
+# Or pick inside the TUI with /models -> Cluster (Local + NIM + Gemini Pro)
 ```
 
 ### 2. VS Code Copilot BYOK & Built-in MCP
-`install.py` registers **`cluster-hw-llm`** (15 tools, 3 resources) in `mcp.json` (and re-enables `"chat.disableAIFeatures": false` if disabled), while `setup_clients.py` populates **`Local Cluster (LM Link)`** (`cluster/*` + `nim/*`) in `chatLanguageModels.json` without touching cloud providers. When the NVIDIA NIM key is present, it also registers the **`NVIDIA NIM Cloud`** entry pointing at `https://integrate.api.nvidia.com/v1/chat/completions`.
-- Open **Copilot Chat** -> Model Picker -> select any `Cluster *` model (`Cluster Code`, `Cluster Fast Agent`, `Cluster Vision Heavy`, etc.) or `NVIDIA NIM *` model and attach `cluster-hw-llm` tools/resources.
+`install.py` registers **`cluster-hw-llm`** (15 tools, 6 resources) in `mcp.json` (and re-enables `"chat.disableAIFeatures": false` if disabled), while `setup_clients.py` populates **`Local Cluster (LM Link)`** (`cluster/*` + `nim/*` + `gemini/*`, provisioned with `gateway.token`) in `chatLanguageModels.json` without touching other providers.
+- Open **Copilot Chat** -> Model Picker -> select any `Cluster *`, `NIM *`, or `Gemini *` model and attach `cluster-hw-llm` tools/resources.
 
 ### 3. Continue (VS Code — PC `torre` & Laptop `portatil`)
-`scripts/install_continue.py` (also called automatically by `setup_clients.py`) backs up any existing `config.yaml` and installs a node-tailored `schema: v1` config to **both Windows** (`%USERPROFILE%\.continue\config.yaml`) **and WSL** (`~/.continue/config.yaml`) with `tool_use` / `image_input` capabilities, tuned `contextLength`, cluster rules, and the `cluster-hw-llm` MCP server:
+`scripts/install_continue.py` (also called automatically by `setup_clients.py`) backs up any existing `config.yaml` and installs a node-tailored `schema: v1` config to **both Windows** (`%USERPROFILE%\.continue\config.yaml`) **and WSL** (`~/.continue/config.yaml`) with `tool_use` / `image_input` capabilities, `gateway.token`, tuned `contextLength`, cluster rules, and the `cluster-hw-llm` MCP server (gating `nim/*` on the NVIDIA NIM key and `gemini/*` on `agy`):
 - **Reference templates:** [profiles/torre/continue-config.yaml](../profiles/torre/continue-config.yaml) (PC) and [profiles/portatil/continue-config.yaml](../profiles/portatil/continue-config.yaml) (Laptop)
 - **Standalone Continue installer (Windows + WSL):**
   - PC (`torre`): `python3 scripts/install_continue.py --node torre --os auto`
   - Laptop (`portatil`): `python3 scripts/install_continue.py --node portatil --os auto` (or `--node auto` to read `cluster.local.json`)
-- **Chat / Edit / Apply:** `cluster/code`, `cluster/code-fast`, `cluster/code-heavy`, `cluster/agent-heavy`, `cluster/fast-agent`, `cluster/vision`, `cluster/vision-heavy`, `cluster/reasoning`, `cluster/math`
+- **Chat / Edit / Apply:** `cluster/code`, `cluster/fast-agent`, `cluster/vision-heavy`, `cluster/reasoning`, `cluster/math` (+ `nim/ultra`, `nim/fast`, `nim/code`, `nim/vision`, `nim/reasoning`, `gemini/orchestrator`, `gemini/pro`, `gemini/flash` when configured)
 - **Tab Autocomplete:** `cluster/autocomplete`
 - **Embeddings (`@codebase`):** `cluster/embed`
-- **NVIDIA NIM cloud models** (when the NVIDIA NIM key is present, see the Cloud Alias Table above): `nim/ultra`, `nim/fast`, `nim/vision`, `nim/reasoning`, `nim/code`, `nim/mistral-large`, `nim/kimi`, `nim/step`, `nim/glm-flash`, `nim/minimax-flash`, `nim/gemma-31b`, `nim/embed`
-- **MCP:** `cluster-hw-llm` (15 tools, 3 resources)
+- **MCP:** `cluster-hw-llm` (15 tools, 6 resources)
 
 ### 4. Cline / Roo Code / Kilo Code / Twinny (VS Code Extensions)
 `install.sh` / `install.ps1` (`--targets vscode`) automatically registers `cluster-hw-llm` across installed extensions on both Windows and WSL (`torre` and `portatil`):

@@ -79,9 +79,11 @@ def cmd_start(cfg, wait_s=8.0):
         print(f"[gateway] already running at {base_url}")
         return 0
 
+    cluster_lib.ensure_gateway_token(REPO_ROOT)
     plat = cluster_lib.detect_platform()
     gw_script = os.path.join(GATEWAY_DIR, "cluster_gateway.py")
     log_path = _log_file()
+    cluster_lib.rotate_log_if_needed(log_path)
     pid_path = _pid_file()
 
     # On Windows+WSL mirrored networking, prefer launching Windows pythonw.exe if installed so
@@ -116,13 +118,28 @@ def cmd_start(cfg, wait_s=8.0):
             win_exe = cluster_lib.normalize_local_path(win_pyw, "windows")
             win_script = cluster_lib.normalize_local_path(gw_script, "windows")
             win_root = cluster_lib.normalize_local_path(REPO_ROOT, "windows")
-            ps_cmd = (
-                f"Start-Process -FilePath '{win_exe}' "
-                f"-ArgumentList '\"{win_script}\" --host {host} --port {port} --repo-root \"{win_root}\"' "
-                "-WindowStyle Hidden"
+            win_log = cluster_lib.normalize_local_path(log_path, "windows")
+            cmd_line = (
+                f'"{win_exe}" "{win_script}" --host {host} --port {port} '
+                f'--repo-root "{win_root}" --log-file "{win_log}"'
             )
-            r = subprocess.run([ps_bin, "-NoProfile", "-Command", ps_cmd], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
-            launched_win = (r.returncode == 0)
+            ps_cmd = (
+                "$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
+                f"-Arguments @{{ CommandLine = '{cmd_line}' }}; "
+                "if ($r.ReturnValue -eq 0 -and $r.ProcessId) { Write-Output $r.ProcessId }"
+            )
+            r = subprocess.run(
+                [ps_bin, "-NoProfile", "-Command", ps_cmd],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            pid_txt = (r.stdout or "").strip()
+            launched_win = (r.returncode == 0 and pid_txt.isdigit())
+            if launched_win:
+                with open(pid_path, "w", encoding="utf-8") as f:
+                    f.write(pid_txt)
 
     if not launched_win:
         with open(log_path, "a", encoding="utf-8") as lf:
@@ -152,7 +169,8 @@ def cmd_stop(cfg):
     pid_path = _pid_file()
     if os.path.isfile(pid_path):
         try:
-            pid = int(open(pid_path, encoding="utf-8").read().strip())
+            with open(pid_path, encoding="utf-8") as f:
+                pid = int(f.read().strip())
             if cluster_lib.detect_platform() != "windows":
                 os.kill(pid, signal.SIGTERM)
         except Exception:
@@ -322,7 +340,8 @@ def cmd_check_lmlink(cfg):
     }
 
     if os.path.isfile(http_cfg_p):
-        hc = json.load(open(http_cfg_p, encoding="utf-8"))
+        with open(http_cfg_p, encoding="utf-8") as f:
+            hc = json.load(f)
         report["http_server_config"] = {
             "autoStartOnLaunch": hc.get("autoStartOnLaunch"),
             "port": hc.get("port"),
@@ -336,7 +355,8 @@ def cmd_check_lmlink(cfg):
             report["warnings"].append("Enable Just-In-Time Model Loading in LM Studio Developer settings")
 
     if os.path.isfile(settings_p):
-        sd = json.load(open(settings_p, encoding="utf-8"))
+        with open(settings_p, encoding="utf-8") as f:
+            sd = json.load(f)
         dev = sd.get("developer") or {}
         report["developer_settings"] = {
             "unloadPreviousJITModelOnLoad": dev.get("unloadPreviousJITModelOnLoad"),
@@ -345,7 +365,8 @@ def cmd_check_lmlink(cfg):
         }
 
     if os.path.isfile(lmlink_p):
-        lc = json.load(open(lmlink_p, encoding="utf-8")).get("json") or {}
+        with open(lmlink_p, encoding="utf-8") as f:
+            lc = json.load(f).get("json") or {}
         report["lm_link_enabled"] = (not lc.get("forceDisabled", False)) and bool(lc.get("allowLoadingModelsOnThisMachine", True))
 
     if cluster_lib.detect_platform() in ("windows", "wsl"):
@@ -353,7 +374,8 @@ def cmd_check_lmlink(cfg):
         if win_home:
             wslcfg = os.path.join(win_home, ".wslconfig")
             if os.path.isfile(wslcfg):
-                txt = open(wslcfg, encoding="utf-8", errors="ignore").read().lower()
+                with open(wslcfg, encoding="utf-8", errors="ignore") as f:
+                    txt = f.read().lower()
                 mirrored = "networkingmode=mirrored" in txt.replace(" ", "")
                 report["wsl_mirrored_networking"] = mirrored
                 if not mirrored:

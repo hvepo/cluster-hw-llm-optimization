@@ -341,6 +341,12 @@ def build_telegram_prompt(user_text, local_node, is_new_session=True):
     )
 
 
+_OAUTH_ABORT_LINE_RE = re.compile(
+    r"^\s*(?:authentication required|waiting for authentication|please authenticate|oauth login required)\b",
+    re.IGNORECASE,
+)
+
+
 def _run_agy_subprocess(cmd, work_dir, timeout_s, cancel_event=None):
     proc = subprocess.Popen(
         cmd,
@@ -359,8 +365,7 @@ def _run_agy_subprocess(cmd, work_dir, timeout_s, cancel_event=None):
         try:
             for ln in proc.stdout:
                 out_chunks.append(ln)
-                low = ln.lower()
-                if "authentication required" in low or "waiting for authentication" in low or _OAUTH_URL_RE.search(ln):
+                if _OAUTH_ABORT_LINE_RE.search(ln) or _OAUTH_URL_RE.search(ln):
                     auth_abort.set()
         except Exception:
             pass
@@ -480,7 +485,7 @@ def route_message(text, ctx=None):
                 "  /new — Start a fresh Antigravity conversation\n"
                 "  /cancel — Abort an in-flight Antigravity turn\n"
                 "  /status — Show active leader, responder & peer status\n"
-                "  /takeover — Promote this node to active Telegram leader\n"
+                "  /takeover [node] — Transfer Telegram leadership (default: sibling compute node)\n"
                 "  /login — Complete one-time Antigravity OAuth login from Telegram\n"
                 "  /help — Show this help"
             ),
@@ -492,7 +497,7 @@ def route_message(text, ctx=None):
     if cmd_tok == "/status":
         return {"action": "status"}
     if cmd_tok == "/takeover":
-        return {"action": "takeover"}
+        return {"action": "takeover", "target_node": arg_str.strip().lower()}
     if cmd_tok in ("/login", "/auth"):
         return {"action": "login", "code": arg_str}
     return {"action": "antigravity", "prompt": cleaned}
@@ -512,6 +517,7 @@ class OAuthFlowManager:
         self.oauth_url = ""
         self.pending_prompt = ""
         self._lines = []
+        self._reader_thread = None
 
     def is_waiting_for_code(self):
         with self._lock:
@@ -523,6 +529,7 @@ class OAuthFlowManager:
             self.proc = None
             self.oauth_url = ""
             self.pending_prompt = ""
+            self._reader_thread = None
         if p is not None:
             _terminate_proc(p)
 
@@ -569,6 +576,7 @@ class OAuthFlowManager:
                 self.oauth_url = url_holder["url"]
                 self.pending_prompt = pending_prompt or ""
                 self._lines = lines
+                self._reader_thread = t
             return {"ok": True, "already_authenticated": False, "url": url_holder["url"]}
 
         # Already authenticated or exited early
@@ -576,6 +584,7 @@ class OAuthFlowManager:
             proc.wait(timeout=10.0)
         except Exception:
             _terminate_proc(proc)
+        t.join(timeout=2.0)
         out_txt = "".join(lines).strip()
         if proc.returncode == 0 and "authentication required" not in out_txt.lower():
             return {"ok": True, "already_authenticated": True, "output": out_txt}
@@ -592,9 +601,11 @@ class OAuthFlowManager:
             proc = self.proc
             pending = self.pending_prompt
             lines = self._lines
+            reader_t = self._reader_thread
             self.proc = None
             self.oauth_url = ""
             self.pending_prompt = ""
+            self._reader_thread = None
         if proc is None or proc.poll() is not None:
             return {"ok": False, "error": "OAuth login session expired (60s timeout). Send /login to get a fresh URL."}
         try:
@@ -612,13 +623,39 @@ class OAuthFlowManager:
             time.sleep(0.25)
         if proc.poll() is None:
             _terminate_proc(proc)
+            if reader_t is not None:
+                reader_t.join(timeout=1.0)
             return {"ok": False, "error": "Timed out verifying OAuth code. Send /login to try again."}
 
+        if reader_t is not None:
+            reader_t.join(timeout=2.0)
         out_txt = "".join(lines).strip()
         low = out_txt.lower()
         if proc.returncode == 0 and "authentication failed" not in low and "error:" not in low:
             return {"ok": True, "pending_prompt": pending}
         return {"ok": False, "error": out_txt[-600:] if out_txt else f"OAuth exited with code {proc.returncode}"}
+
+
+def _resolve_takeover_target(cfg, local_node, requested_node=""):
+    """Resolve /takeover [node] target: empty -> sibling compute node, explicit -> validate non-edge node."""
+    nodes = cfg.get("nodes") or {}
+    compute_nodes = [
+        n for n, nd in nodes.items()
+        if not str((nd or {}).get("role") or "").startswith("edge-")
+    ]
+    req = str(requested_node or "").strip().lower()
+    if not req:
+        siblings = [n for n in compute_nodes if n != local_node]
+        if siblings:
+            return siblings[0], None
+        if local_node in compute_nodes:
+            return local_node, None
+        return None, "No compute sibling node configured for Telegram takeover."
+    if req not in nodes:
+        return None, f"Unknown node {req!r}. Valid compute nodes: {', '.join(compute_nodes) or 'torre, portatil'}."
+    if req not in compute_nodes:
+        return None, f"Node {req!r} is an edge node and cannot host Telegram leadership. Valid compute nodes: {', '.join(compute_nodes)}."
+    return req, None
 
 
 def format_status_reply(cfg, store, chat_id):
@@ -834,11 +871,28 @@ def run_daemon(repo_root=REPO_ROOT, poll_timeout=25):
                     print(f"[telegram-agy] status send error: {exc}", flush=True)
                 continue
             if act == "takeover":
+                target, err_msg = _resolve_takeover_target(cfg, local_node, route.get("target_node") or "")
+                if err_msg:
+                    try:
+                        send_message(bot_token, chat_id, err_msg)
+                    except Exception as exc:
+                        print(f"[telegram-agy] takeover error send failed: {exc}", flush=True)
+                    continue
                 try:
-                    tk = openclaw_ctl.cmd_takeover(cfg)
-                    send_message(bot_token, chat_id, f"Takeover on {local_node}: ok={tk.get('ok')}")
+                    if target == local_node:
+                        tk = openclaw_ctl.cmd_takeover(cfg)
+                        send_message(bot_token, chat_id, f"Takeover on {local_node}: ok={tk.get('ok')}")
+                    else:
+                        send_message(bot_token, chat_id, f"Transferring active Telegram leadership from {local_node} to {target}...")
+                        tk = peer_ctl.remote_openclaw_control(cfg, "takeover", target_node=target)
+                        if not tk.get("ok"):
+                            send_message(bot_token, chat_id, f"Takeover to {target} failed: {tk.get('error') or tk}")
                 except Exception as exc:
                     print(f"[telegram-agy] takeover error: {exc}", flush=True)
+                    try:
+                        send_message(bot_token, chat_id, f"Takeover to {target} failed: {exc}")
+                    except Exception:
+                        pass
                 continue
             if act == "antigravity":
                 if oauth_mgr.is_waiting_for_code():

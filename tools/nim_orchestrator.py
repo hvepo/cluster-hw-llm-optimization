@@ -16,186 +16,32 @@ Return contract (mirrors the `cluster_orchestrate` MCP tool):
 import http.client
 import json
 import os
+import random
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import catalog  # noqa: E402
 import cluster_lib  # noqa: E402
 
-NIM_ORCH_HOST = "integrate.api.nvidia.com"
-NIM_ORCH_PORT = 443
+NIM_ORCH_HOST = catalog.NIM_HOST
+NIM_ORCH_PORT = catalog.NIM_PORT
 NIM_ORCH_PATH = "/v1/chat/completions"
 ORCH_CALL_TIMEOUT_S = 300
 ORCH_TOOL_RESULT_LIMIT = 6000
 ORCH_DEFAULT_MODEL = "nim/ultra"
 ORCH_DEFAULT_MAX_STEPS = 6
 
+ORCH_SYSTEM_PROMPT = (
+    "You are the Cluster Orchestrator across a 4-node hardware & AI mesh: "
+    "torre (desktop RTX 3080 Ti), portatil (laptop Arc 140V), raspberrypi (ARM witness), and arduq (QRB2210+STM32 edge). "
+    "Use the provided tools concisely to inspect live state, delegate to local cluster/* or peer nodes, and verify results before answering. "
+    "Never invent outputs or skip tool verification when asked to inspect or act on the cluster."
+)
 
-ORCHESTRATOR_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "peer_status",
-            "description": "Check live reachability of the local and sibling Peer Order Daemons (:1236), agy CLI availability, offline Drive queue counts, and OpenClaw HA leader status.",
-            "parameters": {
-                "type": "object",
-                "properties": {"node": {"type": "string", "description": "Optional node filter ('torre', 'portatil', 'raspberrypi', or 'arduq')."}},
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "peer_exec",
-            "description": "Run a shell (WSL/Linux bash) or PowerShell (Windows) command on torre, portatil, raspberrypi, or arduq via Tailscale :1236 (with offline queue fallback).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "node": {"type": "string", "description": "Target node ('torre', 'portatil', 'raspberrypi', or 'arduq')."},
-                    "command": {"type": "string", "description": "Shell or PowerShell command to execute."},
-                    "target_os": {"type": "string", "enum": ["auto", "wsl", "windows"], "default": "auto"},
-                    "cwd": {"type": "string"},
-                    "wait_s": {"type": "number", "minimum": 0, "maximum": 300, "default": 30},
-                    "timeout_s": {"type": "integer", "minimum": 5, "maximum": 600, "default": 120},
-                    "queue_if_offline": {"type": "boolean", "default": True},
-                },
-                "required": ["node", "command"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "peer_send_order",
-            "description": "Send an Antigravity order (agy -p) bidirectionally to torre, portatil, raspberrypi, or arduq across WSL, Windows, or auto via Tailscale :1236 (with automatic Google Drive offline queue fallback).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "node": {"type": "string", "description": "Target cluster node ('torre', 'portatil', 'raspberrypi', or 'arduq')."},
-                    "prompt": {"type": "string", "description": "Task or order prompt to execute on the target machine."},
-                    "target_os": {"type": "string", "enum": ["auto", "wsl", "windows"], "default": "auto"},
-                    "mode": {"type": "string", "enum": ["auto", "accept-edits", "plan"], "default": "auto"},
-                    "agent": {"type": "string", "description": "Optional Antigravity agent name."},
-                    "model": {"type": "string", "description": "Optional model override."},
-                    "conversation_id": {"type": "string", "description": "Optional conversation ID to resume a multi-turn thread."},
-                    "cwd": {"type": "string", "description": "Optional working directory on the target node."},
-                    "wait_s": {"type": "number", "minimum": 0, "maximum": 600, "default": 0},
-                    "queue_if_offline": {"type": "boolean", "default": True},
-                    "reply_telegram": {"type": "boolean", "default": False},
-                },
-                "required": ["node", "prompt"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "peer_order_status",
-            "description": "Fetch status, output text, and conversation_id for a peer_send_order or peer_exec job_id (online HTTP or Google Drive completed queue).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "job_id": {"type": "string"},
-                    "node": {"type": "string", "description": "Target node where the job ran ('torre', 'portatil', 'raspberrypi', or 'arduq')."},
-                },
-                "required": ["job_id"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "cluster_models",
-            "description": "List unified cluster/* (local), nim/* (NVIDIA NIM cloud), and gemini/* (Gemini Pro subscription) aliases on the Cluster Router Gateway (:1235), their live resolved model & node, context length, loaded status, and active failover/anti-thrash routing.",
-            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "cluster_chat",
-            "description": "Delegate a prompt or follow-up turn to a local cluster/* model alias, nim/* cloud alias, or gemini/* subscription alias (e.g. cluster/code, nim/ultra, nim/fast, gemini/pro, gemini/flash) via the Cluster Router Gateway /api/v1/chat endpoint.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "prompt": {"type": "string", "description": "User prompt to send to the selected model."},
-                    "model": {"type": "string", "default": "cluster/code", "description": "Virtual alias (cluster/*, nim/*, or gemini/*) or concrete model id (default: cluster/code)."},
-                    "system_prompt": {"type": "string", "description": "Optional system instruction."},
-                    "reasoning": {"type": "string", "enum": ["off", "low", "medium", "high", "on"], "description": "Optional reasoning mode override."},
-                    "previous_response_id": {"type": "string", "description": "Optional response_id from a prior turn to continue stateful chat."},
-                    "integrations": {"type": "array", "items": {"type": "string"}, "description": "Optional MCP integrations (e.g. ['mcp/browse'])."},
-                    "store": {"type": "boolean", "default": True, "description": "Whether to store conversation state for previous_response_id chaining."},
-                    "timeout_s": {"type": "integer", "minimum": 10, "maximum": 600, "default": 180},
-                },
-                "required": ["prompt"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "hw_node_profile",
-            "description": "Inspect hardware configuration, motherboard/BIOS, RAM DIMMs, GPUs (NVIDIA/Intel Arc/AMD), chipset/platform drivers, power plan (MinCPU/ASPM), VBS/HVCI/HAGS, storage, Event Log stability, and optional HWiNFO64 JSON export for a cluster node.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "node": {"type": "string", "description": "Cluster node name from cluster.local.json (defaults to local_node)."},
-                    "days": {"type": "integer", "minimum": 1, "maximum": 90, "default": 14},
-                    "hwinfo_path": {"type": "string", "description": "Optional path to a HWiNFO64 JSON export file."},
-                },
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "node_llm_status",
-            "description": "Check live LM Studio / OpenAI server reachability, listed models, and currently loaded models on one or all configured cluster nodes.",
-            "parameters": {
-                "type": "object",
-                "properties": {"node": {"type": "string", "description": "Optional node name filter from cluster.local.json."}},
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "node_best_configs",
-            "description": "Read verified tuned per-model serving configurations and before/after benchmarks from profiles/best-config.json.",
-            "parameters": {
-                "type": "object",
-                "properties": {"node": {"type": "string", "description": "Optional node name filter (e.g. 'torre' or 'portatil')."}},
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "openclaw_control",
-            "description": "Inspect, start, stop, cleanly transfer Active-Standby leadership (takeover without Telegram 409 Conflict), sync Telegram secrets, or send a Telegram reply via the Antigravity-first Telegram HA responder (or optional OpenClaw gateway).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "enum": ["status", "start", "stop", "takeover", "telegram_reply", "sync_secrets"]},
-                    "node": {"type": "string", "description": "Optional node to run the action on (defaults to local_node)."},
-                    "message": {"type": "string", "description": "Message text when action='telegram_reply'."},
-                },
-                "required": ["action"],
-                "additionalProperties": False,
-            },
-        },
-    },
-]
-
+ORCHESTRATOR_TOOLS = catalog.orchestrator_openai_tools()
 ORCHESTRATOR_TOOL_NAMES = {t["function"]["name"] for t in ORCHESTRATOR_TOOLS}
 
 
@@ -205,26 +51,42 @@ def _nim_chat_completion(api_key, model, messages, tools=None, timeout_s=ORCH_CA
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
     raw = json.dumps(payload).encode("utf-8")
-    conn = http.client.HTTPSConnection(NIM_ORCH_HOST, NIM_ORCH_PORT, timeout=timeout_s)
-    try:
-        conn.request(
-            "POST",
-            NIM_ORCH_PATH,
-            body=raw,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Content-Length": str(len(raw)),
-            },
-        )
-        resp = conn.getresponse()
-        body = resp.read().decode("utf-8", "replace")
-    finally:
-        conn.close()
-    if resp.status >= 400:
-        raise RuntimeError(f"NVIDIA NIM HTTP {resp.status}: {body[:500]}")
-    return json.loads(body)
+    max_attempts = 3
+    last_exc = None
+    for attempt in range(max_attempts):
+        conn = http.client.HTTPSConnection(NIM_ORCH_HOST, NIM_ORCH_PORT, timeout=timeout_s)
+        try:
+            conn.request(
+                "POST",
+                NIM_ORCH_PATH,
+                body=raw,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "Content-Length": str(len(raw)),
+                },
+            )
+            resp = conn.getresponse()
+            body = resp.read().decode("utf-8", "replace")
+            if resp.status == 429 or resp.status >= 500:
+                last_exc = RuntimeError(f"NVIDIA NIM HTTP {resp.status}: {body[:500]}")
+                if attempt + 1 < max_attempts:
+                    time.sleep((1.0 * (2 ** attempt)) + random.uniform(0.0, 0.35))
+                    continue
+                raise last_exc
+            if resp.status >= 400:
+                raise RuntimeError(f"NVIDIA NIM HTTP {resp.status}: {body[:500]}")
+            return json.loads(body)
+        except (http.client.HTTPException, OSError, TimeoutError) as exc:
+            last_exc = exc
+            if attempt + 1 < max_attempts:
+                time.sleep((1.0 * (2 ** attempt)) + random.uniform(0.0, 0.35))
+                continue
+            raise RuntimeError(f"NVIDIA NIM transport error: {exc}") from exc
+        finally:
+            conn.close()
+    raise RuntimeError(str(last_exc or "NVIDIA NIM request failed"))
 
 
 def _truncate(text, limit=ORCH_TOOL_RESULT_LIMIT):
@@ -261,24 +123,16 @@ def _parse_tool_args(raw_args):
 
 def _resolve_nim_model(model):
     """Map a `nim/*` alias to the concrete NVIDIA model id (falls back to the input)."""
-    try:
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "gateway"))
-        import cluster_gateway
-
-        spec = cluster_gateway.NIM_ALIAS_SPECS.get(model)
-        if spec:
-            return spec["candidates"][0]
-        if model in cluster_gateway.NIM_DIRECT_MODEL_IDS:
-            return model
-    except Exception:
-        pass
+    spec = catalog.NIM_ALIAS_SPECS.get(model)
+    if spec:
+        return spec["candidates"][0]
+    if model in catalog.NIM_DIRECT_MODEL_IDS:
+        return model
     return model
 
 
 GEMINI_FALLBACK_MAP = {
-    "gemini/orchestrator": "gemini-pro-orchestrator-neon",
-    "gemini/pro": "gemini-4-neon-medium",
-    "gemini/flash": "gemini-3.8-flash-medium",
+    alias: spec["candidates"][0] for alias, spec in catalog.GEMINI_ALIAS_SPECS.items()
 }
 
 
@@ -286,17 +140,11 @@ def _resolve_gemini_model(model):
     """Map a `gemini/*` alias to the concrete Antigravity (`agy`) model id."""
     if model in GEMINI_FALLBACK_MAP:
         return GEMINI_FALLBACK_MAP[model]
-    try:
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "gateway"))
-        import cluster_gateway
-
-        spec = cluster_gateway.GEMINI_ALIAS_SPECS.get(model)
-        if spec:
-            return spec["candidates"][0]
-        if model in cluster_gateway.GEMINI_DIRECT_MODEL_IDS:
-            return model
-    except Exception:
-        pass
+    spec = catalog.GEMINI_ALIAS_SPECS.get(model)
+    if spec:
+        return spec["candidates"][0]
+    if model in catalog.GEMINI_DIRECT_MODEL_IDS:
+        return model
     if str(model).startswith("gemini/"):
         return str(model).split("/", 1)[1]
     return model
@@ -334,7 +182,7 @@ def _run_gemini_orchestrator(prompt, alias, timeout_s=ORCH_CALL_TIMEOUT_S):
         "--dangerously-skip-permissions",
         "--disable-slash-commands",
         "--output-format",
-        "json",
+        "stream-json",
         "--print-timeout",
         f"{timeout_s}s",
     ]
@@ -354,28 +202,67 @@ def _run_gemini_orchestrator(prompt, alias, timeout_s=ORCH_CALL_TIMEOUT_S):
         result["error"] = f"Gemini Pro orchestrator invocation failed: {exc}"
         return result
 
-    obj = {}
-    for line in reversed((r.stdout or "").splitlines()):
-        s = line.strip()
-        if s.startswith("{"):
-            try:
-                obj = json.loads(s)
-                break
-            except Exception:
-                continue
+    conv_id = ""
+    result_obj = {}
+    fallback_obj = {}
+    trace = []
+    text_parts = []
+    for raw_line in (r.stdout or "").splitlines():
+        s = raw_line.strip()
+        if not s.startswith("{"):
+            continue
+        try:
+            ev = json.loads(s)
+        except Exception:
+            continue
+        if ev.get("conversation_id"):
+            conv_id = str(ev["conversation_id"])
+        ev_kind = ev.get("event")
+        if ev_kind == "step_update":
+            su = ev.get("step_update") or {}
+            if su.get("conversation_id"):
+                conv_id = str(su["conversation_id"])
+            if su.get("text_delta"):
+                text_parts.append(str(su["text_delta"]))
+            tool_name = su.get("tool_name") or su.get("function_name") or (su.get("tool_call") or {}).get("name")
+            if tool_name or su.get("step_type") in ("tool_call", "tool_result"):
+                trace.append({
+                    "step": len(trace) + 1,
+                    "tool": str(tool_name or su.get("step_type") or "tool"),
+                    "args": su.get("tool_args") or su.get("args") or {},
+                    "result": _truncate(str(su.get("tool_result") or su.get("output") or su.get("state") or "")),
+                })
+        elif ev_kind == "result":
+            result_obj = ev.get("result") or {}
+            if result_obj.get("conversation_id"):
+                conv_id = str(result_obj["conversation_id"])
+        elif "status" in ev or "response" in ev or "error" in ev:
+            fallback_obj = ev
 
-    conv_id = str(obj.get("conversation_id") or "")
+    obj = result_obj or fallback_obj
+    if not conv_id and obj.get("conversation_id"):
+        conv_id = str(obj["conversation_id"])
     status = str(obj.get("status") or ("SUCCESS" if r.returncode == 0 else "ERROR"))
-    num_turns = int(obj.get("num_turns") or 1)
-    resp_text = str(obj.get("response") or "").strip()
+    num_turns = int(obj.get("num_turns") or max(1, len(trace)))
+    resp_text = str(obj.get("response") or "".join(text_parts)).strip()
+
+    if not trace:
+        trace = [{
+            "step": 1,
+            "tool": "agy_native_runtime",
+            "args": {"model": agy_model},
+            "result": f"conversation_id={conv_id} status={status}",
+        }]
 
     if r.returncode != 0 or status != "SUCCESS":
         err_msg = obj.get("error") or (r.stderr or r.stdout or f"agy exited {r.returncode}").strip()
+        if trace and trace[-1]["tool"] == "agy_native_runtime":
+            trace[-1]["result"] = f"status={status} error={err_msg[:300]}"
         result.update({
             "ok": False,
             "steps_executed": num_turns,
             "conversation_id": conv_id,
-            "tool_trace": [{"step": 1, "tool": "agy_native_runtime", "args": {"model": agy_model}, "result": f"status={status} error={err_msg[:300]}"}],
+            "tool_trace": trace,
             "error": err_msg,
         })
         return result
@@ -384,7 +271,7 @@ def _run_gemini_orchestrator(prompt, alias, timeout_s=ORCH_CALL_TIMEOUT_S):
         "ok": True,
         "steps_executed": num_turns,
         "conversation_id": conv_id,
-        "tool_trace": [{"step": 1, "tool": "agy_native_runtime", "args": {"model": agy_model}, "result": f"conversation_id={conv_id} status={status}"}],
+        "tool_trace": trace,
         "text": resp_text,
     })
     return result
@@ -423,7 +310,10 @@ def run_orchestrator(prompt, model=ORCH_DEFAULT_MODEL, max_steps=ORCH_DEFAULT_MA
     nim_model = _resolve_nim_model(alias)
     trace = []
     executed = 0
-    messages = [{"role": "user", "content": str(prompt or "")}]
+    messages = [
+        {"role": "system", "content": ORCH_SYSTEM_PROMPT},
+        {"role": "user", "content": str(prompt or "")},
+    ]
 
     while executed < max_steps:
         try:
@@ -452,7 +342,7 @@ def run_orchestrator(prompt, model=ORCH_DEFAULT_MODEL, max_steps=ORCH_DEFAULT_MA
                 messages.append(
                     {"role": "tool", "tool_call_id": tc["id"], "content": "Step budget reached; provide your final summary."}
                 )
-                break
+                continue
             name = tc["function"]["name"]
             targs = _parse_tool_args(tc["function"]["arguments"])
             if name not in ORCHESTRATOR_TOOL_NAMES:
@@ -474,13 +364,22 @@ def run_orchestrator(prompt, model=ORCH_DEFAULT_MODEL, max_steps=ORCH_DEFAULT_MA
     # Budget exhausted while tools were still requested: ask for a final summary.
     text = ""
     try:
-        obj = _nim_chat_completion(api_key, nim_model, messages, tools=None, max_tokens=4096)
+        obj = _nim_chat_completion(api_key, nim_model, messages, tools=None, timeout_s=timeout_s, max_tokens=4096)
         choices = obj.get("choices") or []
         msg = choices[0].get("message") or {} if choices else {}
         text = (msg.get("content") or msg.get("reasoning_content") or "").strip()
         resolved = obj.get("model") or resolved
-    except Exception:
-        pass
+    except Exception as exc:
+        result.update(
+            {
+                "ok": False,
+                "error": f"Final summary failed after step budget: {exc}",
+                "steps_executed": executed,
+                "tool_trace": trace,
+                "resolved_model": resolved,
+            }
+        )
+        return result
 
     result.update(
         {

@@ -208,6 +208,16 @@ def mcp_roundtrip(framing="ndjson", live=False):
         write_msg({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "llm_compute_ceiling", "arguments": {"profile": "torre"}}})
         ceil_txt = json.loads(read_msg()["result"]["content"][0]["text"])
         assert "decode" in ceil_txt and "prefill" in ceil_txt
+        if framing == "lsp":
+            # Arbitrary header ordering (Content-Type before Content-Length) + isError: true check
+            payload_err = json.dumps({"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "node_llm_control", "arguments": {"action": "load"}}}).encode("utf-8")
+            proc.stdin.write(
+                f"Content-Type: application/vscode-jsonrpc; charset=utf-8\r\nContent-Length: {len(payload_err)}\r\n\r\n".encode("ascii")
+                + payload_err
+            )
+            proc.stdin.flush()
+            err_resp = read_msg()
+            assert err_resp["result"].get("isError") is True, f"Expected MCP isError=True, got {err_resp}"
         if live:
             for idx, (tname, targs) in enumerate(
                 [
@@ -552,21 +562,53 @@ def check_gateway_and_clients():
 
     old_env = os.environ.get("CLUSTER_GATEWAY_LOAD_VIA_REST")
     os.environ["CLUSTER_GATEWAY_LOAD_VIA_REST"] = "1"
-    router = cluster_gateway.ClusterRouter(upstream_url=f"http://127.0.0.1:{up_port}", repo_root=REPO_ROOT, cache_ttl=0.0)
+    gw_tok = "test-gw-token-1234567890abcdef"
+    router = cluster_gateway.ClusterRouter(upstream_url=f"http://127.0.0.1:{up_port}", repo_root=REPO_ROOT, cache_ttl=0.0, token=gw_tok)
     gw_srv = cluster_gateway.ClusterGatewayServer(("127.0.0.1", 0), router)
     gw_port = gw_srv.server_address[1]
     t_gw = threading.Thread(target=gw_srv.serve_forever, daemon=True)
     t_gw.start()
     gw_base = f"http://127.0.0.1:{gw_port}"
 
-    def req_json(method, path, payload=None):
+    def req_json(method, path, payload=None, extra_hdrs=None, use_auth=True):
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         hdrs = {"Content-Type": "application/json"} if payload is not None else {}
+        if use_auth and method == "POST":
+            hdrs["Authorization"] = f"Bearer {gw_tok}"
+        if extra_hdrs:
+            hdrs.update(extra_hdrs)
         rq = urllib.request.Request(gw_base + path, data=data, headers=hdrs, method=method)
         with urllib.request.urlopen(rq, timeout=5) as r:
             return r.status, dict(r.headers), json.loads(r.read().decode("utf-8"))
 
     try:
+        # 0. Auth enforcement, strict CORS (no *), 413 oversized body, and chunked POST body
+        try:
+            req_json("POST", "/v1/chat/completions", {"model": "cluster/code", "messages": [{"role": "user", "content": "hi"}]}, use_auth=False)
+            raise AssertionError("Expected 401 on unauthenticated POST")
+        except urllib.error.HTTPError as e:
+            assert e.code == 401
+        _, x_hdrs, _ = req_json("POST", "/v1/chat/completions", {"model": "cluster/code", "messages": [{"role": "user", "content": "hi"}]}, extra_hdrs={"X-Api-Key": gw_tok}, use_auth=False)
+        assert x_hdrs.get("Access-Control-Allow-Origin") is None, f"Unexpected wildcard/default CORS: {x_hdrs}"
+        _, evil_cors_hdrs, _ = req_json("GET", "/health", extra_hdrs={"Origin": "https://evil.example"})
+        assert "Access-Control-Allow-Origin" not in evil_cors_hdrs
+
+        import http.client
+        c_big = http.client.HTTPConnection("127.0.0.1", gw_port, timeout=5)
+        c_big.request("POST", "/v1/chat/completions", body=b"{}", headers={"Authorization": f"Bearer {gw_tok}", "Content-Length": str(20 * 1024 * 1024)})
+        r_big = c_big.getresponse()
+        r_big.read()
+        assert r_big.status == 413
+        c_big.close()
+
+        c_chk = http.client.HTTPConnection("127.0.0.1", gw_port, timeout=5)
+        chk_payload = json.dumps({"model": "cluster/code", "messages": [{"role": "user", "content": "hi"}]}).encode("utf-8")
+        c_chk.request("POST", "/v1/chat/completions", body=f"{len(chk_payload):x}\r\n".encode("ascii") + chk_payload + b"\r\n0\r\n\r\n", headers={"Authorization": f"Bearer {gw_tok}", "Content-Type": "application/json", "Transfer-Encoding": "chunked"})
+        r_chk = c_chk.getresponse()
+        r_chk.read()
+        assert r_chk.status == 200
+        c_chk.close()
+
         # 1. Discovery + draft filtering + Option B tuned contexts
         _, _, h = req_json("GET", "/health")
         assert h["ok"] and h["upstream_reachable"]
@@ -602,7 +644,7 @@ def check_gateway_and_clients():
         rq_sse = urllib.request.Request(
             gw_base + "/api/v1/chat",
             data=json.dumps({"model": "cluster/code", "input": "hi", "stream": True, "integrations": ["mcp/browse"]}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {gw_tok}"},
             method="POST",
         )
         with urllib.request.urlopen(rq_sse, timeout=5) as rs:
@@ -666,10 +708,19 @@ def check_gateway_and_clients():
         _, _, un_ok = req_json("POST", "/api/v1/models/unload", {"instance_id": "cluster/fast-agent"})
         assert un_ok["instance_id"] == "t-fast-agent"
 
+        # Cloud alias load/unload short-circuit (must not hit upstream LM Studio)
+        calls_before = len(mock_state["calls"])
+        _, _, cld = req_json("POST", "/api/v1/models/load", {"model": "nim/ultra"})
+        assert cld["noop"] is True and cld["cloud"] == "nvidia-nim"
+        _, _, cun = req_json("POST", "/api/v1/models/unload", {"instance_id": "gemini/pro"})
+        assert cun["noop"] is True and cun["cloud"] == "gemini-pro"
+        assert len(mock_state["calls"]) == calls_before
+
         # 4b. MCP cluster_models & cluster_chat end-to-end against mocked Cluster Gateway
         mcp_srv = os.path.join(REPO_ROOT, "mcp", "cluster_mcp_server.py")
         mcp_env = dict(os.environ)
         mcp_env["CLUSTER_GATEWAY_URL"] = gw_base
+        mcp_env["CLUSTER_GATEWAY_TOKEN"] = gw_tok
         m_proc = subprocess.Popen(
             [sys.executable, mcp_srv],
             stdin=subprocess.PIPE,
@@ -735,6 +786,7 @@ def check_gateway_and_clients():
                 _, _, stg = req_json("GET", "/cluster/status")
                 assert stg["gemini_pro_configured"] is True
                 assert stg["aliases"]["gemini/orchestrator"]["online"] is True
+                assert "metrics" in stg and stg["metrics"]["requests_total"] >= 1
                 _, _, oai_gm = req_json("GET", "/v1/models")
                 oai_gids = {m["id"] for m in oai_gm["data"]}
                 assert {"gemini/orchestrator", "gemini/pro", "gemini/flash"}.issubset(oai_gids)
@@ -747,13 +799,28 @@ def check_gateway_and_clients():
                 rq_gsse = urllib.request.Request(
                     gw_base + "/v1/chat/completions",
                     data=json.dumps({"model": "gemini/flash", "stream": True, "messages": [{"role": "user", "content": "hi"}]}).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
+                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {gw_tok}"},
                     method="POST",
                 )
                 with urllib.request.urlopen(rq_gsse, timeout=5) as rgs:
                     assert rgs.headers.get("X-Cluster-Resolved-Model") == "gemini-3.8-flash-medium"
                     gsse_txt = rgs.read().decode("utf-8")
                     assert "GEM_STREAM_" in gsse_txt and "\"finish_reason\": \"stop\"" in gsse_txt and "data: [DONE]" in gsse_txt
+
+                # Native Anthropic & Responses SSE for gemini/*
+                for ep, body_obj, expected_ev in (
+                    ("/v1/messages", {"model": "gemini/pro", "max_tokens": 32, "stream": True, "messages": [{"role": "user", "content": "hi"}]}, "content_block_delta"),
+                    ("/v1/responses", {"model": "gemini/flash", "stream": True, "input": "hi"}, "response.output_text.delta"),
+                ):
+                    rq_ep = urllib.request.Request(
+                        gw_base + ep,
+                        data=json.dumps(body_obj).encode("utf-8"),
+                        headers={"Content-Type": "application/json", "Authorization": f"Bearer {gw_tok}"},
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(rq_ep, timeout=5) as rep:
+                        ep_txt = rep.read().decode("utf-8")
+                        assert expected_ev in ep_txt and "GEM_STREAM_" in ep_txt, f"Missing {expected_ev} in {ep} SSE: {ep_txt}"
 
                 _, hdr_gn1, gn1 = req_json("POST", "/api/v1/chat", {"model": "gemini/orchestrator", "input": "turn 1"})
                 assert hdr_gn1["X-Cluster-Resolved-Model"] == "gemini-pro-orchestrator-neon"
@@ -762,9 +829,12 @@ def check_gateway_and_clients():
 
                 _, _, gn2 = req_json("POST", "/api/v1/chat", {"model": "gemini/orchestrator", "input": "turn 2", "previous_response_id": gn1["response_id"]})
                 assert gn2["response_id"] == "resp_agy_conv_gem_123"
-                logged_agy = open(agy_log, encoding="utf-8").read()
-                assert "--mode auto --dangerously-skip-permissions" in logged_agy
-                assert "--conversation conv_gem_123" in logged_agy
+                logged_lines = open(agy_log, encoding="utf-8").read().splitlines()
+                pro_flash_lines = [ln for ln in logged_lines if "gemini-4-neon-medium" in ln or "gemini-3.8-flash-medium" in ln]
+                assert pro_flash_lines and all("--mode plan" in ln and "--dangerously-skip-permissions" not in ln for ln in pro_flash_lines), f"gemini/pro|flash must use --mode plan: {pro_flash_lines}"
+                orch_lines = [ln for ln in logged_lines if "gemini-pro-orchestrator-neon" in ln]
+                assert orch_lines and any("--mode auto --dangerously-skip-permissions" in ln for ln in orch_lines)
+                assert any("--conversation conv_gem_123" in ln for ln in orch_lines)
             finally:
                 if old_agy_env is None:
                     os.environ.pop("CLUSTER_AGY_BIN", None)
@@ -886,6 +956,31 @@ def check_gateway_and_clients():
             ptxt = open(cont_p, encoding="utf-8").read()
             assert "Portatil" in ptxt and "cluster/code" in ptxt and "nim/ultra" in ptxt and "gemini/orchestrator" in ptxt and "mcpServers:" in ptxt
 
+        # Verify env.ps1 uses POSIX '/' paths when Windows runs via wsl.exe bridge, and provisions gateway.token
+        env_wsl = dict(env)
+        env_wsl.pop("CLUSTER_INSTALL_WIN_PYTHON", None)
+        r_wsl_ps1 = subprocess.run(
+            [sys.executable, setup_script, "--os", "windows", "--clients", "env", "--win-use-wsl-python"],
+            stdin=subprocess.DEVNULL, env=env_wsl, text=True, capture_output=True, timeout=20,
+        )
+        assert r_wsl_ps1.returncode == 0
+        ps1_txt = open(os.path.join(win_home, ".config", "cluster-llm", "env.ps1"), encoding="utf-8").read()
+        assert "/tools/gateway/cluster_chat.py" in ps1_txt and "\\tools\\gateway" not in ps1_txt
+        assert "CLUSTER_GATEWAY_TOKEN" in ps1_txt and "cluster-doctor" in ps1_txt
+
+        # Verify install_continue.py gates nim/* and gemini/* when keys/agy are missing
+        env_local_only = dict(env)
+        env_local_only["NVIDIA_API_KEY"] = ""
+        env_local_only["CLUSTER_AGY_BIN"] = "/nonexistent/agy"
+        env_local_only["HOME"] = posix_home
+        r_ic_gate = subprocess.run(
+            [sys.executable, ic_script, "--node", "torre", "--os", "wsl"],
+            stdin=subprocess.DEVNULL, env=env_local_only, text=True, capture_output=True, timeout=20,
+        )
+        assert r_ic_gate.returncode == 0
+        gated_txt = open(os.path.join(posix_home, ".continue", "config.yaml"), encoding="utf-8").read()
+        assert "cluster/code" in gated_txt and "nim/ultra" not in gated_txt and "gemini/orchestrator" not in gated_txt
+
         r2 = subprocess.run(
             [sys.executable, setup_script, "--os", "windows,wsl", "--clients", "all", "--uninstall"],
             stdin=subprocess.DEVNULL, env=env, text=True, capture_output=True, timeout=20,
@@ -956,6 +1051,32 @@ def check_gateway_and_clients():
         assert orch_res["tool_trace"][0]["tool"] == "peer_status"
         assert "unknown tool for orchestrator" in orch_res["tool_trace"][1]["result"]
         assert orch_res["text"] == "ORCH_REASONING_OK"
+
+        # 7a-2. Verify budget cutoff answers ALL remaining tool_call_ids (continue, not break) and summary errors set ok=False
+        seen_msgs = []
+        def _budget_completion(api_key, model, messages, tools=None, timeout_s=300, max_tokens=8192):
+            seen_msgs.append(list(messages))
+            if tools:
+                return {
+                    "model": model,
+                    "choices": [{
+                        "message": {
+                            "content": None,
+                            "tool_calls": [
+                                {"id": "tc_a", "type": "function", "function": {"name": "peer_status", "arguments": "{}"}},
+                                {"id": "tc_b", "type": "function", "function": {"name": "peer_status", "arguments": "{}"}},
+                                {"id": "tc_c", "type": "function", "function": {"name": "peer_status", "arguments": "{}"}},
+                            ],
+                        }
+                    }],
+                }
+            raise RuntimeError("simulated summary 500")
+
+        nim_orchestrator._nim_chat_completion = _budget_completion
+        b_res = nim_orchestrator.run_orchestrator("budget test", model="nim/ultra", max_steps=1, tool_executor=_fake_exec)
+        assert b_res["ok"] is False and "Final summary failed" in b_res["error"]
+        last_tool_ids = [m["tool_call_id"] for m in seen_msgs[-1] if m.get("role") == "tool"]
+        assert last_tool_ids == ["tc_a", "tc_b", "tc_c"], f"Expected all tool_call_ids answered, got {last_tool_ids}"
     finally:
         nim_orchestrator._nim_chat_completion = orig_call
         nim_orchestrator.cluster_lib.resolve_nvidia_api_key = orig_resolve_key
@@ -1040,6 +1161,15 @@ def check_peer_and_openclaw():
             with open(os.path.join(inbox, "job_unsigned.json"), "w", encoding="utf-8") as f:
                 json.dump({"job_id": "job_unsigned", "kind": "exec", "command": "echo tampering", "target_os": "wsl"}, f)
             assert rt.poll_offline_queue_once() == 0, "Unsigned offline queue payload must be rejected"
+            assert os.path.isfile(os.path.join(sync_dir, "peer-queue", "failed", "job_unsigned.json")), "Rejected offline payload should be dead-lettered"
+            assert peer_daemon.verify_queue_payload({}, "") is False, "Empty token must fail closed"
+
+            # Path traversal job_id must be rejected (400)
+            try:
+                urllib.request.urlopen(urllib.request.Request(base + "/jobs/..%2Fbad", headers={"Authorization": f"Bearer {tok}"}), timeout=3)
+                raise AssertionError("Expected 400 on invalid job_id")
+            except urllib.error.HTTPError as e:
+                assert e.code == 400
 
             q_id = "job_offline_test"
             q_rec = {"job_id": q_id, "kind": "exec", "command": "echo drive-ok", "target_os": "wsl"}
@@ -1205,7 +1335,22 @@ def check_peer_and_openclaw():
             assert telegram_agy_daemon.route_message("/new")["action"] == "reset"
             assert telegram_agy_daemon.route_message("/cancel")["action"] == "cancel"
             assert telegram_agy_daemon.route_message("/status")["action"] == "status"
-            assert telegram_agy_daemon.route_message("/takeover")["action"] == "takeover"
+            assert telegram_agy_daemon.route_message("/takeover") == {"action": "takeover", "target_node": ""}
+            assert telegram_agy_daemon.route_message("/takeover portatil") == {"action": "takeover", "target_node": "portatil"}
+            t_sib, t_err = telegram_agy_daemon._resolve_takeover_target(
+                {"nodes": {"torre": {"role": "desktop"}, "portatil": {"role": "laptop"}, "raspberrypi": {"role": "edge-arm-witness"}}},
+                "torre",
+                "",
+            )
+            assert t_sib == "portatil" and t_err is None
+            t_edge, t_edge_err = telegram_agy_daemon._resolve_takeover_target(
+                {"nodes": {"torre": {"role": "desktop"}, "portatil": {"role": "laptop"}, "raspberrypi": {"role": "edge-arm-witness"}}},
+                "torre",
+                "raspberrypi",
+            )
+            assert t_edge is None and "edge node" in t_edge_err
+            assert telegram_agy_daemon._OAUTH_ABORT_LINE_RE.search("The server returned authentication required in docs") is None
+            assert telegram_agy_daemon._OAUTH_ABORT_LINE_RE.search("Authentication required. Visit URL") is not None
             assert telegram_agy_daemon.route_message("/login")["action"] == "login"
             assert telegram_agy_daemon.route_message("/login 4/0AeanS")["code"] == "4/0AeanS"
             assert telegram_agy_daemon.route_message("ping") == {"action": "antigravity", "prompt": "ping"}
@@ -1281,33 +1426,62 @@ def check_peer_and_openclaw():
 def check_privacy(files):
     generic_patterns = [
         ("tailscale_cgnat_ip", re.compile(r"\b100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b")),
-        ("hardcoded_user_path", re.compile(r"(?:/home/|C:\\\\?Users\\\\?)(?!<USER>)[A-Za-z0-9_.-]{2,}")),
+        ("hardcoded_user_path", re.compile(r"(?:/home/|C:\\\\?Users\\\\?)(?!<USER>)[A-Za-z0-9_.-]{2,}", re.IGNORECASE)),
         ("github_token", re.compile(r"\b(?:ghp|gho|github_pat)_[A-Za-z0-9_]{12,}\b")),
         ("openai_token", re.compile(r"\bsk-[A-Za-z0-9]{20,}\b")),
         ("nvidia_token", re.compile(r"\bnvapi-[A-Za-z0-9_-]{20,}\b")),
-        ("bearer_token", re.compile(r"Bearer\s+[A-Za-z0-9._-]{16,}")),
+        ("bearer_token", re.compile(r"Bearer\s+[A-Za-z0-9._-]{16,}", re.IGNORECASE)),
     ]
 
+    safe_terms = {
+        "root", "user", "localhost", "ubuntu", "pc", "laptop",
+        "torre", "portatil", "raspberrypi", "arduq", "rpi",
+        "github.com", "gitlab.com", "arduino",
+    }
     dynamic_terms = set()
     for term in (os.environ.get("USER"), os.environ.get("USERNAME"), socket.gethostname()):
-        if term and len(term) >= 3 and term.lower() not in ("root", "user", "localhost", "ubuntu", "pc", "laptop"):
+        if term and len(term) >= 3 and term.lower() not in safe_terms:
             dynamic_terms.add(term)
     loc_cfg = os.path.join(REPO_ROOT, "cluster.local.json")
     if os.path.isfile(loc_cfg):
-        raw_loc = open(loc_cfg, encoding="utf-8", errors="replace").read()
+        with open(loc_cfg, encoding="utf-8", errors="replace") as f:
+            raw_loc = f.read()
         for m in re.findall(r"\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+\b", raw_loc):
             dynamic_terms.add(m)
-        for m in re.findall(r"(?:/home/|/Users/|\\\\Users\\\\|C:\\\\Users\\\\)([A-Za-z0-9_.-]+)", raw_loc):
-            if "<" not in m:
+        for m in re.findall(r"(?:/home/|/Users/|\\\\Users\\\\|C:\\\\Users\\\\)([A-Za-z0-9_.-]+)", raw_loc, re.IGNORECASE):
+            if "<" not in m and m.lower() not in safe_terms:
                 dynamic_terms.add(m)
+
+    ssh_cfg = os.path.join(os.path.expanduser("~"), ".ssh", "config")
+    if os.path.isfile(ssh_cfg):
+        try:
+            with open(ssh_cfg, encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    s = line.strip()
+                    if not s or s.startswith("#"):
+                        continue
+                    parts = s.split(None, 1)
+                    if len(parts) < 2:
+                        continue
+                    k, v = parts[0].lower(), parts[1].strip()
+                    if k in ("host", "hostname", "user"):
+                        for tok_val in v.split():
+                            if "*" in tok_val or "?" in tok_val or len(tok_val) < 3:
+                                continue
+                            if tok_val.lower() not in safe_terms:
+                                dynamic_terms.add(tok_val)
+        except OSError:
+            pass
 
     hits = []
     for fpath in files:
         try:
-            txt = open(fpath, encoding="utf-8", errors="ignore").read()
+            with open(fpath, encoding="utf-8", errors="ignore") as f:
+                txt = f.read()
         except OSError:
             continue
         rel = os.path.relpath(fpath, REPO_ROOT)
+        txt_low = txt.lower()
         for label, pat in generic_patterns:
             m = pat.search(txt)
             if m:
@@ -1316,7 +1490,7 @@ def check_privacy(files):
                     continue
                 hits.append(f"{rel}: matched {label} -> {matched!r}")
         for term in dynamic_terms:
-            if term in txt:
+            if term.lower() in txt_low:
                 hits.append(f"{rel}: matched local machine identifier {term!r}")
     assert not hits, "Privacy scan failed:\n  " + "\n  ".join(hits)
     print(f"[PASS] Privacy scan clean across {len(files)} repo files (checked {len(dynamic_terms)} dynamic identifiers)")

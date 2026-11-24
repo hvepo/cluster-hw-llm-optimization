@@ -24,34 +24,15 @@ for d in (SCRIPTS_DIR, TOOLS_DIR):
     if d not in sys.path:
         sys.path.insert(0, d)
 
+import catalog  # noqa: E402
 import cluster_lib  # noqa: E402
 import install as inst  # noqa: E402
 import install_continue  # noqa: E402
 
-CLIENT_MODELS = [
-    {"id": "cluster/code", "name": "Cluster Code (30B MoE -> 14B)", "ctx": 16384, "out": 4096, "tools": True, "vision": False},
-    {"id": "cluster/fast-agent", "name": "Cluster Fast Agent (8B 130 tok/s)", "ctx": 16384, "out": 4096, "tools": True, "vision": False},
-    {"id": "cluster/vision-heavy", "name": "Cluster Vision Heavy (26B 32K)", "ctx": 32768, "out": 4096, "tools": True, "vision": True},
-    {"id": "cluster/reasoning", "name": "Cluster Reasoning (R1-14B Think)", "ctx": 8192, "out": 4096, "tools": True, "vision": False},
-    {"id": "cluster/math", "name": "Cluster Math (Phi-4 14B)", "ctx": 8192, "out": 4096, "tools": False, "vision": False},
-]
-
-# NVIDIA NIM cloud resources via the Cluster Router Gateway (:1235), gated on the NVIDIA NIM API key.
-NIM_CLIENT_MODELS = [
-    {"id": "nim/ultra", "upstream_id": "nvidia/nemotron-3-ultra-550b-a55b", "name": "NIM Ultra (550B Cloud Orchestrator)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
-    {"id": "nim/fast", "upstream_id": "nvidia/nemotron-3.5-lightning-30b-a3b", "name": "NIM Fast (30B Cloud Lightning)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
-    {"id": "nim/code", "upstream_id": "poolside/laguna-xs-2.1", "name": "NIM Code (Laguna-XS Cloud Coder)", "ctx": 65536, "out": 8192, "tools": True, "vision": False},
-    {"id": "nim/vision", "upstream_id": "nvidia/nemotron-3.5-super-vl-120b-a12b", "name": "NIM Vision (120B Cloud VL)", "ctx": 131072, "out": 8192, "tools": True, "vision": True},
-    {"id": "nim/reasoning", "upstream_id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "name": "NIM Reasoning (30B Cloud CoT)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
-]
+CLIENT_MODELS = catalog.CLIENT_MODELS
+NIM_CLIENT_MODELS = catalog.NIM_CLIENT_MODELS
 NIM_CHAT_MODELS = list(NIM_CLIENT_MODELS)
-
-# Gemini Pro subscription resources via Cluster Router Gateway (:1235 -> OAuth agy bridge, $0 extra API cost).
-GEMINI_CLIENT_MODELS = [
-    {"id": "gemini/orchestrator", "name": "Gemini Pro Orchestrator (Autonomous Cloud)", "ctx": 1000000, "out": 65536, "tools": True, "vision": False},
-    {"id": "gemini/pro", "name": "Gemini Pro (Flagship Cloud Architect)", "ctx": 1000000, "out": 65536, "tools": True, "vision": False},
-    {"id": "gemini/flash", "name": "Gemini Flash (Fast Cloud Assistant)", "ctx": 1000000, "out": 65536, "tools": True, "vision": False},
-]
+GEMINI_CLIENT_MODELS = catalog.GEMINI_CLIENT_MODELS
 
 # Built-in / auto-discovered / legacy OpenCode providers hidden so OpenCode presents pure Cluster Mode.
 DENIED_OPENCODE_PROVIDERS = ("lmstudio", "ollama", "opencode", "nvidia", "nvidia-nim", "sglang")
@@ -73,12 +54,23 @@ def parse_clients(raw):
     return items
 
 
+def _resolve_gateway_api_key(endpoint, dry_run=False):
+    cfg = cluster_lib.load_cluster_config(REPO_ROOT)
+    upstream = ((cfg.get("gateway") or {}).get("upstream_url") or "http://127.0.0.1:1234").rstrip("/")
+    if endpoint.rstrip("/") == upstream:
+        return "local-cluster"
+    if dry_run:
+        return cluster_lib.resolve_gateway_token(cfg, repo_root=REPO_ROOT) or "local-cluster"
+    return cluster_lib.ensure_gateway_token(REPO_ROOT) or "local-cluster"
+
+
 def _backup_if_needed(path, dry_run=False):
     if dry_run or not os.path.isfile(path):
         return
     stamp = time.strftime("%Y%m%d-%H%M%S")
     bak = f"{path}.{stamp}.bak"
     shutil.copy2(path, bak)
+    cluster_lib.prune_old_files(os.path.dirname(path), os.path.basename(path) + ".*.bak", max_age_days=14, max_count=5)
 
 
 def _opencode_dirs(ctx, os_tag):
@@ -187,12 +179,13 @@ def setup_opencode(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             for m in GEMINI_CLIENT_MODELS:
                 models_map[m["id"]] = _oc_entry(m)
 
+        gw_api_key = _resolve_gateway_api_key(endpoint, dry_run=dry_run)
         data["provider"]["cluster"] = {
             "npm": "@ai-sdk/openai-compatible",
             "name": "Cluster (Local + NIM + Gemini Pro)",
             "options": {
                 "baseURL": v1_url,
-                "apiKey": "local-cluster",
+                "apiKey": gw_api_key,
             },
             "models": models_map,
         }
@@ -293,13 +286,14 @@ def setup_vscode_byok(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
                     continue
             cleaned.append(item)
 
+        gw_api_key = _resolve_gateway_api_key(endpoint, dry_run=dry_run)
         nim_key = cluster_lib.resolve_nvidia_api_key()
         has_gemini = cluster_lib.is_gemini_pro_configured()
         byok_models = CLIENT_MODELS + (NIM_CHAT_MODELS if nim_key else []) + (GEMINI_CLIENT_MODELS if has_gemini else [])
         cluster_entry = {
             "name": provider_name,
             "vendor": "customendpoint",
-            "apiKey": "local-cluster",
+            "apiKey": gw_api_key,
             "apiType": "chat-completions",
             "models": [
                 {
@@ -319,6 +313,7 @@ def setup_vscode_byok(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
 
 
 def setup_continue(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
+    gw_api_key = None if uninstall else _resolve_gateway_api_key(endpoint, dry_run=dry_run)
     install_continue.install_continue_for_ctx(
         ctx=ctx,
         os_tag=os_tag,
@@ -326,6 +321,7 @@ def setup_continue(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         node="auto",
         dry_run=dry_run,
         uninstall=uninstall,
+        api_key=gw_api_key,
     )
 
 
@@ -374,6 +370,7 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
     v1 = base + "/v1"
     api_v1 = base + "/api/v1"
     cfg_dir = os.path.join(ctx["home_local"], ".config", "cluster-llm")
+    gw_api_key = None if uninstall else _resolve_gateway_api_key(endpoint, dry_run=dry_run)
 
     if os_tag == "windows":
         target = os.path.join(cfg_dir, "env.ps1")
@@ -383,20 +380,36 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
                 if not dry_run:
                     os.remove(target)
             return
-        win_root = ctx["repo_str"]
         win_cmd = ctx["mcp_command"]
         pre_args = " ".join(f'"{a}"' for a in ctx["mcp_args"][:-1])
-        chat_script = win_root.rstrip("\\") + r"\tools\gateway\cluster_chat.py"
-        agy_script = win_root.rstrip("\\") + r"\tools\gateway\agy_local_agent.py"
-        ctl_script = win_root.rstrip("\\") + r"\tools\cluster_ctl.py"
-        gw_ctl_script = win_root.rstrip("\\") + r"\tools\gateway\gateway_ctl.py"
-        peer_script = win_root.rstrip("\\") + r"\tools\peer\peer_ctl.py"
-        tg_script = win_root.rstrip("\\") + r"\tools\peer\openclaw_ctl.py"
+        is_wsl_bridge = (ctx.get("mode") == "wsl_python_bridge")
+        if is_wsl_bridge:
+            p_root = ctx["repo_str"].rstrip("/")
+            chat_script = f"{p_root}/tools/gateway/cluster_chat.py"
+            agy_script = f"{p_root}/tools/gateway/agy_local_agent.py"
+            ctl_script = f"{p_root}/tools/cluster_ctl.py"
+            gw_ctl_script = f"{p_root}/tools/gateway/gateway_ctl.py"
+            peer_script = f"{p_root}/tools/peer/peer_ctl.py"
+            tg_script = f"{p_root}/tools/peer/openclaw_ctl.py"
+            hw_script = f"{p_root}/tools/hw/hardware_probe.py"
+            doc_script = f"{p_root}/scripts/doctor.py"
+        else:
+            win_root = ctx["repo_str"].rstrip("\\")
+            chat_script = win_root + r"\tools\gateway\cluster_chat.py"
+            agy_script = win_root + r"\tools\gateway\agy_local_agent.py"
+            ctl_script = win_root + r"\tools\cluster_ctl.py"
+            gw_ctl_script = win_root + r"\tools\gateway\gateway_ctl.py"
+            peer_script = win_root + r"\tools\peer\peer_ctl.py"
+            tg_script = win_root + r"\tools\peer\openclaw_ctl.py"
+            hw_script = win_root + r"\tools\hw\hardware_probe.py"
+            doc_script = win_root + r"\scripts\doctor.py"
         ps_body = (
             "# Opt-in Local Cluster helpers for PowerShell\n"
             f"$env:CLUSTER_API_BASE = '{base}'\n"
             f"$env:CLUSTER_OPENAI_BASE = '{v1}'\n"
             f"$env:CLUSTER_LMS_API_V1 = '{api_v1}'\n"
+            f"$env:CLUSTER_GATEWAY_TOKEN = '{gw_api_key}'\n"
+            f"$env:CLUSTER_API_KEY = '{gw_api_key}'\n"
             "# NVIDIA NIM cloud helpers (requires %USERPROFILE%\\.config\\nvidia_api_key or $env:NVIDIA_API_KEY)\n"
             "if (-not $env:NVIDIA_API_KEY) {\n"
             "  $nvKeyFile = Join-Path $env:USERPROFILE '.config\\nvidia_api_key'\n"
@@ -420,19 +433,23 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             "}\n"
             "function use-cluster-openai {\n"
             f"  $env:OPENAI_BASE_URL = '{v1}'\n"
-            "  $env:OPENAI_API_KEY = 'local-cluster'\n"
+            f"  $env:OPENAI_API_KEY = '{gw_api_key}'\n"
             "  Write-Host \"OPENAI_BASE_URL=$env:OPENAI_BASE_URL\"\n"
             "}\n"
             "function cluster-status { & " + f'"{win_cmd}" {pre_args} "{gw_ctl_script}" status @args' + " }\n"
+            "function cluster-gateway { & " + f'"{win_cmd}" {pre_args} "{gw_ctl_script}" @args' + " }\n"
+            "function cluster-llm { & " + f'"{win_cmd}" {pre_args} "{ctl_script}" @args' + " }\n"
             "function cluster-chat { & " + f'"{win_cmd}" {pre_args} "{chat_script}" @args' + " }\n"
             "function cluster-agy { & " + f'"{win_cmd}" {pre_args} "{agy_script}" @args' + " }\n"
             "function cluster-preset { param([string]$Name='home-dual') & " + f'"{win_cmd}" {pre_args} "{ctl_script}" preset $Name' + " }\n"
             "function cluster-peer { & " + f'"{win_cmd}" {pre_args} "{peer_script}" @args' + " }\n"
             "function cluster-telegram { & " + f'"{win_cmd}" {pre_args} "{tg_script}" @args' + " }\n"
+            "function cluster-hw { & " + f'"{win_cmd}" {pre_args} "{hw_script}" @args' + " }\n"
+            "function cluster-doctor { & " + f'"{win_cmd}" {pre_args} "{doc_script}" @args' + " }\n"
             "function cluster-claude {\n"
             "  param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest)\n"
             f"  $env:ANTHROPIC_BASE_URL = '{base}'\n"
-            "  $env:ANTHROPIC_AUTH_TOKEN = 'local-cluster'\n"
+            f"  $env:ANTHROPIC_AUTH_TOKEN = '{gw_api_key}'\n"
             "  if (-not $env:ANTHROPIC_MODEL) { $env:ANTHROPIC_MODEL = 'cluster/code' }\n"
             "  if (-not $env:ANTHROPIC_SMALL_FAST_MODEL) { $env:ANTHROPIC_SMALL_FAST_MODEL = 'cluster/fast-agent' }\n"
             "  & claude @Rest\n"
@@ -456,7 +473,9 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             shim_path = os.path.join(bin_dir, name)
             if os.path.isfile(shim_path):
                 try:
-                    if SHIM_MARKER in open(shim_path, encoding="utf-8", errors="ignore").read():
+                    with open(shim_path, encoding="utf-8", errors="ignore") as sf:
+                        shim_txt = sf.read()
+                    if SHIM_MARKER in shim_txt:
                         print(f"[{os_tag}:cli] remove {shim_path}")
                         if not dry_run:
                             os.remove(shim_path)
@@ -470,6 +489,8 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         f'export CLUSTER_API_BASE="{base}"\n'
         f'export CLUSTER_OPENAI_BASE="{v1}"\n'
         f'export CLUSTER_LMS_API_V1="{api_v1}"\n'
+        f'export CLUSTER_GATEWAY_TOKEN="{gw_api_key}"\n'
+        f'export CLUSTER_API_KEY="{gw_api_key}"\n'
         "# NVIDIA NIM cloud helpers (requires ~/.config/nvidia_api_key or NVIDIA_API_KEY)\n"
         'if [ -z "$NVIDIA_API_KEY" ] && [ -f "$HOME/.config/nvidia_api_key" ]; then\n'
         '  _nim_key="$(tr -d \'\\r\\n\' < "$HOME/.config/nvidia_api_key" 2>/dev/null)"\n'
@@ -492,7 +513,7 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         "}\n"
         "use-cluster-openai() {\n"
         f'  export OPENAI_BASE_URL="{v1}"\n'
-        '  export OPENAI_API_KEY="local-cluster"\n'
+        f'  export OPENAI_API_KEY="{gw_api_key}"\n'
         '  echo "OPENAI_BASE_URL=$OPENAI_BASE_URL"\n'
         "}\n"
         f'cluster-status() {{ "{py}" "{posix_repo}/tools/gateway/gateway_ctl.py" status "$@"; }}\n'
@@ -502,16 +523,16 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         f'cluster-peer() {{ "{py}" "{posix_repo}/tools/peer/peer_ctl.py" "$@"; }}\n'
         f'cluster-telegram() {{ "{py}" "{posix_repo}/tools/peer/openclaw_ctl.py" "$@"; }}\n'
         "cluster-claude() {\n"
-        f'  ANTHROPIC_BASE_URL="{base}" ANTHROPIC_AUTH_TOKEN="local-cluster" \\\n'
+        f'  ANTHROPIC_BASE_URL="{base}" ANTHROPIC_AUTH_TOKEN="{gw_api_key}" \\\n'
         '  ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-cluster/code}" \\\n'
         '  ANTHROPIC_SMALL_FAST_MODEL="${ANTHROPIC_SMALL_FAST_MODEL:-cluster/fast-agent}" \\\n'
         '  claude "$@"\n'
         "}\n"
         "cluster-codex() {\n"
-        '  CLUSTER_API_KEY="local-cluster" codex -c model_provider="cluster" "$@"\n'
+        f'  CLUSTER_API_KEY="{gw_api_key}" codex -c model_provider="cluster" "$@"\n'
         "}\n"
         "cluster-aider() {\n"
-        f'  OPENAI_API_BASE="{v1}" OPENAI_API_KEY="local-cluster" \\\n'
+        f'  OPENAI_API_BASE="{v1}" OPENAI_API_KEY="{gw_api_key}" \\\n'
         '  aider --model "openai/${CLUSTER_CODE_MODEL:-cluster/code}" --weak-model "openai/cluster/fast-agent" "$@"\n'
         "}\n"
     )
@@ -586,7 +607,11 @@ def setup_codex(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
     print(f"[{os_tag}:codex] configure [model_providers.cluster]{' + [model_providers.nvidia]' if nim_key else ''} -> {cfg_path}")
     if not dry_run:
         os.makedirs(codex_dir, exist_ok=True)
-        existing = open(cfg_path, encoding="utf-8").read() if os.path.isfile(cfg_path) else ""
+        if os.path.isfile(cfg_path):
+            with open(cfg_path, encoding="utf-8") as f:
+                existing = f.read()
+        else:
+            existing = ""
         pre = _strip_block(existing, marker_start, marker_end)
         pre = _strip_block(pre, nim_marker_start, nim_marker_end)
         out = (pre.rstrip() + "\n\n" if pre.strip() else "") + "\n\n".join(blocks)
@@ -607,6 +632,17 @@ def apply_clients_for_os(os_tag, ctx, clients, endpoint, dry_run=False, uninstal
         setup_shell_helpers(ctx, os_tag, endpoint, dry_run=dry_run, uninstall=uninstall)
     if "codex" in clients:
         setup_codex(ctx, os_tag, endpoint, dry_run=dry_run, uninstall=uninstall)
+    if os_tag in ("wsl", "linux") and not uninstall and not dry_run:
+        oc_path = os.path.join(ctx["home_local"], ".openclaw", "openclaw.json")
+        if os.path.isfile(oc_path):
+            try:
+                peer_dir = os.path.join(TOOLS_DIR, "peer")
+                if peer_dir not in sys.path:
+                    sys.path.insert(0, peer_dir)
+                import openclaw_ctl  # noqa: E402
+                openclaw_ctl.configure_openclaw(cluster_lib.load_cluster_config(REPO_ROOT), config_path=oc_path)
+            except Exception:
+                pass
 
 
 def main(argv=None):

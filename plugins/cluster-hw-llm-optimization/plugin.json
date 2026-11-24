@@ -2,7 +2,7 @@
   "name": "cluster-hw-llm-optimization",
   "displayName": "Cluster Horizontal Platform (HW, LLMs, Peer & Telegram)",
   "description": "Cross-project hardware/BIOS profiler, per-node LLM serving tuner, 5-protocol :1235 Cluster Gateway, bidirectional :1236 Peer Bridge, and Antigravity-first Telegram HA responder across Windows and WSL.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "author": "cluster-hw-llm-optimization contributors",
   "suggestedPrompts": [
     "Check live cluster/* models, peer node health, and Telegram HA status with cluster_models and peer_status",

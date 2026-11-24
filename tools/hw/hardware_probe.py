@@ -176,10 +176,132 @@ def analyze_hwinfo(path, whea_apics=None):
     }
 
 
+def query_linux_host():
+    """Collect native Linux / ARM hardware, memory, disk, and thermal telemetry."""
+    info = {
+        "uname": platform.uname()._asdict(),
+        "arch": platform.machine(),
+        "logical_cpus": os.cpu_count(),
+    }
+    try:
+        cpu_model = ""
+        cpu_hw = ""
+        cores = 0
+        with open("/proc/cpuinfo", "r", encoding="utf-8", errors="ignore") as f:
+            for ln in f:
+                low = ln.lower()
+                if low.startswith("processor"):
+                    cores += 1
+                elif low.startswith("model name") and not cpu_model:
+                    cpu_model = ln.split(":", 1)[1].strip()
+                elif low.startswith("hardware") and not cpu_hw:
+                    cpu_hw = ln.split(":", 1)[1].strip()
+        info["cpu_model"] = cpu_model or cpu_hw
+        if cores:
+            info["cpu_cores_detected"] = cores
+    except OSError:
+        pass
+    try:
+        mem = {}
+        with open("/proc/meminfo", "r", encoding="utf-8", errors="ignore") as f:
+            for ln in f:
+                if ":" not in ln:
+                    continue
+                k, v = ln.split(":", 1)
+                parts = v.strip().split()
+                if parts and parts[0].isdigit():
+                    mem[k.strip()] = int(parts[0])
+        if "MemTotal" in mem:
+            info["total_ram_gib"] = round(mem["MemTotal"] / (1024 * 1024), 2)
+        if "MemAvailable" in mem:
+            info["available_ram_gib"] = round(mem["MemAvailable"] / (1024 * 1024), 2)
+    except OSError:
+        pass
+    try:
+        import shutil
+        du = shutil.disk_usage("/")
+        info["root_disk_gib"] = {"total": round(du.total / 2**30, 2), "free": round(du.free / 2**30, 2)}
+    except OSError:
+        pass
+    thermals = []
+    try:
+        tdir = "/sys/class/thermal"
+        if os.path.isdir(tdir):
+            for entry in sorted(os.listdir(tdir)):
+                if not entry.startswith("thermal_zone"):
+                    continue
+                tp = os.path.join(tdir, entry, "temp")
+                if os.path.isfile(tp):
+                    with open(tp, "r", encoding="utf-8", errors="ignore") as tf:
+                        raw = tf.read().strip()
+                    if raw.lstrip("-").isdigit():
+                        thermals.append({"zone": entry, "temp_c": round(int(raw) / 1000.0, 1)})
+    except OSError:
+        pass
+    if thermals:
+        info["thermals"] = thermals
+    return info
+
+
+def _delegate_remote_hardware_profile(cfg, target_node, days=14):
+    peer_dir = os.path.join(TOOLS_DIR, "peer")
+    if peer_dir not in sys.path:
+        sys.path.insert(0, peer_dir)
+    import peer_ctl  # noqa: E402
+
+    remote_py = (
+        "import json, os, platform, shutil, sys\n"
+        "for d in (os.path.expanduser('~/.cluster-peer/tools/hw'), os.path.join(os.getcwd(), 'tools', 'hw')):\n"
+        "    if os.path.isfile(os.path.join(d, 'hardware_probe.py')):\n"
+        "        sys.path.insert(0, d)\n"
+        "        import hardware_probe\n"
+        f"        print(json.dumps(hardware_probe.collect_node_hardware_profile(node={target_node!r}, days={int(days)})))\n"
+        "        raise SystemExit(0)\n"
+        "info = {'node': " + repr(target_node) + ", 'platform': 'linux', 'host_arch': platform.machine(), 'uname': platform.uname()._asdict(), 'logical_cpus': os.cpu_count()}\n"
+        "try:\n"
+        "    mem = {}\n"
+        "    with open('/proc/meminfo') as f:\n"
+        "        for ln in f:\n"
+        "            if ':' in ln:\n"
+        "                k, v = ln.split(':', 1)\n"
+        "                p = v.strip().split()\n"
+        "                if p and p[0].isdigit(): mem[k.strip()] = int(p[0])\n"
+        "    if 'MemTotal' in mem: info['total_ram_gib'] = round(mem['MemTotal'] / (1024*1024), 2)\n"
+        "    if 'MemAvailable' in mem: info['available_ram_gib'] = round(mem['MemAvailable'] / (1024*1024), 2)\n"
+        "except OSError: pass\n"
+        "print(json.dumps(info))\n"
+    )
+    cmd = f"python3 -c {json.dumps(remote_py)}"
+    res = peer_ctl.exec_command(cfg, target_node, cmd, wait_s=30.0, timeout_s=45, queue_if_offline=False)
+    if not res.get("ok") or res.get("status") != "completed":
+        return {
+            "ok": False,
+            "node": target_node,
+            "remote": True,
+            "error": res.get("error") or res.get("stderr") or f"Failed to probe remote node {target_node!r}",
+        }
+    out_txt = (res.get("stdout") or "").strip()
+    for line in reversed(out_txt.splitlines()):
+        s = line.strip()
+        if s.startswith("{"):
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, dict):
+                    parsed.setdefault("configured_node_spec", (cfg.get("nodes") or {}).get(target_node))
+                    parsed["remote"] = True
+                    return parsed
+            except Exception:
+                pass
+    return {"ok": False, "node": target_node, "remote": True, "error": f"Invalid remote probe output: {out_txt[:300]}"}
+
+
 def collect_node_hardware_profile(node=None, days=14, hwinfo_path=None):
     cfg = load_cluster_config()
     plat = detect_platform()
-    target_node = node or cfg.get("local_node", "torre")
+    local_node = cfg.get("local_node", "torre")
+    target_node = node or local_node
+    if target_node != local_node:
+        return _delegate_remote_hardware_profile(cfg, target_node, days=days)
     lms_home = resolve_local_lmstudio_home(cfg, node=target_node)
     default_dir = os.path.join(lms_home, ".internal", "user-concrete-model-default-config")
     default_cfgs = 0
@@ -209,6 +331,8 @@ def collect_node_hardware_profile(node=None, days=14, hwinfo_path=None):
         ev = out["windows_host"].get("stability_events") or {}
         whea_apics = [e.get("Apic") for e in (ev.get("whea_events") or []) if isinstance(e, dict)]
     else:
+        if plat == "linux":
+            out["linux_host"] = query_linux_host()
         whea_apics = []
 
     if hwinfo_path:

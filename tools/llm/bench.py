@@ -122,9 +122,29 @@ def document(tokens, seed, needles=3):
 def on_ac():
     try:
         if sys.platform == "darwin":
-            return "AC Power" in subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True).stdout
+            return "AC Power" in subprocess.run(["pmset", "-g", "batt"], stdin=subprocess.DEVNULL, capture_output=True, text=True).stdout
+        sys_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        if sys_dir not in sys.path:
+            sys.path.insert(0, sys_dir)
+        from cluster_lib import detect_platform, resolve_host_binary
+        plat = detect_platform()
+        if plat in ("windows", "wsl"):
+            ps_bin = resolve_host_binary("powershell.exe")
+            ps = (
+                "$b = @(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue); "
+                "if ($b.Count -eq 0) { 'AC'; exit 0 }; "
+                "if ($b | Where-Object { $_.BatteryStatus -in 2,6,7,8,9 }) { 'AC' } else { 'DC' }"
+            )
+            r = subprocess.run([ps_bin, "-NoProfile", "-Command", ps], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=8)
+            out = (r.stdout or "").strip().upper()
+            if out in ("AC", "DC"):
+                return out == "AC"
+            return True
         import glob
-        vals = [open(p).read().strip() for p in glob.glob("/sys/class/power_supply/*/online")]
+        vals = []
+        for p in glob.glob("/sys/class/power_supply/*/online"):
+            with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                vals.append(f.read().strip())
         return not vals or "1" in vals
     except Exception:
         return True

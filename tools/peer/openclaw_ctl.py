@@ -28,6 +28,7 @@ REPO_ROOT = os.path.abspath(os.path.join(TOOLS_DIR, ".."))
 if TOOLS_DIR not in sys.path:
     sys.path.insert(0, TOOLS_DIR)
 
+import catalog  # noqa: E402
 import cluster_lib  # noqa: E402
 
 
@@ -68,16 +69,6 @@ def resolve_peer_token(cfg=None, sync_dir=None):
     tok = ((cfg.get("peer") or {}).get("token") or "").strip()
     if tok and not tok.startswith("<"):
         return tok
-    sdir = sync_dir if sync_dir is not None else resolve_sync_dir(cfg)
-    if sdir:
-        tok_path = os.path.join(sdir, "peer.token")
-        if os.path.isfile(tok_path):
-            try:
-                val = open(tok_path, "r", encoding="utf-8").read().strip()
-                if val:
-                    return val
-            except OSError:
-                pass
     return ""
 
 
@@ -304,7 +295,10 @@ def install_runtime(force=False):
             if got_sha != expected_sha:
                 raise RuntimeError(f"Node.js SHA256 mismatch: expected {expected_sha}, got {got_sha}")
             with tarfile.open(tmp_tar, "r:xz") as tar:
-                tar.extractall(base_dir)
+                try:
+                    tar.extractall(base_dir, filter="data")
+                except TypeError:
+                    tar.extractall(base_dir)
             extracted_dir = os.path.join(base_dir, target_name[: -len(".tar.xz")])
             cur_link = os.path.join(base_dir, "current")
             if os.path.islink(cur_link) or os.path.exists(cur_link):
@@ -351,9 +345,11 @@ def configure_openclaw(cfg=None, config_path=None):
 
     data = {}
     if os.path.isfile(cpath):
-        data = json.load(open(cpath, encoding="utf-8"))
+        with open(cpath, encoding="utf-8") as f:
+            data = json.load(f)
         bak = f"{cpath}.{time.strftime('%Y%m%d-%H%M%S')}.bak"
         shutil.copy2(cpath, bak)
+        cluster_lib.prune_old_files(os.path.dirname(cpath), os.path.basename(cpath) + ".*.bak", max_age_days=14, max_count=5)
 
     gw = cfg.get("gateway") or {}
     gw_url = f"http://{gw.get('host', '127.0.0.1')}:{int(gw.get('port', 1235))}/v1"
@@ -362,112 +358,14 @@ def configure_openclaw(cfg=None, config_path=None):
     models_sec.setdefault("mode", "merge")
     providers = models_sec.setdefault("providers", {})
     existing_cl = providers.get("cluster-local") or {}
-    api_key = existing_cl.get("apiKey") or "local-cluster"
+    gw_tok = cluster_lib.resolve_gateway_token(cfg, repo_root=REPO_ROOT)
+    api_key = gw_tok or existing_cl.get("apiKey") or "local-cluster"
 
     providers["cluster-local"] = {
         "baseUrl": gw_url,
         "apiKey": api_key,
         "api": "openai-completions",
-        "models": [
-            {
-                "id": "cluster/code",
-                "name": "Cluster Code (30B MoE -> 14B)",
-                "api": "openai-completions",
-                "contextWindow": 16384,
-                "maxTokens": 4096,
-            },
-            {
-                "id": "cluster/fast-agent",
-                "name": "Cluster Fast Agent (8B 130 tok/s)",
-                "api": "openai-completions",
-                "contextWindow": 16384,
-                "maxTokens": 4096,
-            },
-            {
-                "id": "cluster/code-fast",
-                "name": "Cluster Code Fast (14B 72 tok/s)",
-                "api": "openai-completions",
-                "contextWindow": 12288,
-                "maxTokens": 4096,
-            },
-            {
-                "id": "cluster/reasoning",
-                "name": "Cluster Reasoning (R1-14B Think)",
-                "api": "openai-completions",
-                "contextWindow": 8192,
-                "maxTokens": 4096,
-            },
-            {
-                "id": "cluster/vision-heavy",
-                "name": "Cluster Vision Heavy (26B 32K)",
-                "api": "openai-completions",
-                "contextWindow": 32768,
-                "maxTokens": 2048,
-            },
-            {
-                "id": "cluster/math",
-                "name": "Cluster Math (Phi-4 14B)",
-                "api": "openai-completions",
-                "contextWindow": 8192,
-                "maxTokens": 4096,
-            },
-            {
-                "id": "nim/ultra",
-                "name": "NIM Ultra (550B Cloud Orchestrator)",
-                "api": "openai-completions",
-                "contextWindow": 131072,
-                "maxTokens": 16384,
-            },
-            {
-                "id": "nim/fast",
-                "name": "NIM Fast (30B Cloud Lightning)",
-                "api": "openai-completions",
-                "contextWindow": 131072,
-                "maxTokens": 8192,
-            },
-            {
-                "id": "nim/code",
-                "name": "NIM Code (Laguna-XS Cloud Coder)",
-                "api": "openai-completions",
-                "contextWindow": 65536,
-                "maxTokens": 8192,
-            },
-            {
-                "id": "nim/vision",
-                "name": "NIM Vision (120B Cloud VL)",
-                "api": "openai-completions",
-                "contextWindow": 131072,
-                "maxTokens": 8192,
-            },
-            {
-                "id": "nim/reasoning",
-                "name": "NIM Reasoning (30B Cloud CoT)",
-                "api": "openai-completions",
-                "contextWindow": 131072,
-                "maxTokens": 8192,
-            },
-            {
-                "id": "gemini/orchestrator",
-                "name": "Gemini Pro Orchestrator (Autonomous Cloud)",
-                "api": "openai-completions",
-                "contextWindow": 1000000,
-                "maxTokens": 65536,
-            },
-            {
-                "id": "gemini/pro",
-                "name": "Gemini Pro (Flagship Cloud Architect)",
-                "api": "openai-completions",
-                "contextWindow": 1000000,
-                "maxTokens": 65536,
-            },
-            {
-                "id": "gemini/flash",
-                "name": "Gemini Flash (Fast Cloud Assistant)",
-                "api": "openai-completions",
-                "contextWindow": 1000000,
-                "maxTokens": 65536,
-            },
-        ],
+        "models": catalog.openclaw_model_entries(),
     }
 
     # Remove duplicate standalone nvidia-nim provider; all 13 curated local+NIM+Gemini models route cleanly through :1235
@@ -715,7 +613,8 @@ def _read_pid(path):
     if not os.path.isfile(path):
         return None
     try:
-        pid = int(open(path, "r", encoding="utf-8").read().strip())
+        with open(path, "r", encoding="utf-8") as f:
+            pid = int(f.read().strip())
         return pid if _pid_alive(pid) else None
     except Exception:
         return None
@@ -737,7 +636,8 @@ def _ancestor_pids(start_pid=None):
             break
         ancestors.add(cur)
         try:
-            st = open(f"/proc/{cur}/stat", "r", encoding="utf-8", errors="ignore").read()
+            with open(f"/proc/{cur}/stat", "r", encoding="utf-8", errors="ignore") as f:
+                st = f.read()
             rparen = st.rfind(")")
             if rparen == -1:
                 break
@@ -848,7 +748,15 @@ def cmd_start(cfg, force=False, manual_leader=None):
 
     cur_pid = _read_pid(_oc_pid_file())
     if cur_pid:
-        store.acquire_or_renew(local_node, pid=cur_pid, ttl_s=ttl_s, force=force, manual_leader=manual_leader)
+        ok, lease = store.acquire_or_renew(local_node, pid=cur_pid, ttl_s=ttl_s, force=force, manual_leader=manual_leader)
+        if not ok:
+            cmd_stop(cfg, release_lease=False)
+            return {
+                "ok": False,
+                "fenced_local": True,
+                "error": f"Lease held by {lease.get('holder_node')} until {lease.get('expires_at')}",
+                "lease": lease,
+            }
         return {"ok": True, "already_running": True, "pid": cur_pid, "node": local_node, "responder": responder, "port": port}
 
     ok, lease = store.acquire_or_renew(local_node, pid=None, ttl_s=ttl_s, force=force, manual_leader=manual_leader)
@@ -858,6 +766,7 @@ def cmd_start(cfg, force=False, manual_leader=None):
     _ensure_secure_openclaw_dir(openclaw_home(), private=True)
     sweep_orphan_openclaw()
     log_path = _oc_log_file()
+    cluster_lib.rotate_log_if_needed(log_path)
     if responder == "antigravity":
         launch_cmd = [sys.executable, os.path.join(PEER_DIR, "telegram_agy_daemon.py"), "--repo-root", REPO_ROOT]
     else:
@@ -942,7 +851,8 @@ def cmd_status(cfg):
     gw_url = None
     if os.path.isfile(cpath):
         try:
-            oc_data = json.load(open(cpath, encoding="utf-8"))
+            with open(cpath, encoding="utf-8") as f:
+                oc_data = json.load(f)
             tg = (oc_data.get("channels") or {}).get("telegram") or {}
             tg_ok = bool(tg.get("enabled") and tg.get("botToken"))
             gw_url = (((oc_data.get("models") or {}).get("providers") or {}).get("cluster-local") or {}).get("baseUrl")
@@ -970,7 +880,8 @@ def send_telegram_reply(message, chat_id=None):
     cpath = openclaw_config_path()
     if not os.path.isfile(cpath):
         return {"ok": False, "error": f"Missing {cpath}"}
-    data = json.load(open(cpath, encoding="utf-8"))
+    with open(cpath, encoding="utf-8") as f:
+        data = json.load(f)
     tg = (data.get("channels") or {}).get("telegram") or {}
     bot_token = (tg.get("botToken") or "").strip()
     target_chat = str(chat_id or ((tg.get("allowFrom") or [""])[0])).strip()
@@ -999,6 +910,11 @@ def _probe_node_peer(cfg, node_name, timeout=1.5):
         return False
 
 
+def _sentinel_log(msg):
+    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    print(f"[sentinel] {ts} {msg}", flush=True)
+
+
 def run_sentinel_loop(cfg, once=False):
     local_node = cfg.get("local_node", "torre")
     oc_cfg = ((cfg.get("peer") or {}).get("openclaw") or {})
@@ -1008,9 +924,11 @@ def run_sentinel_loop(cfg, once=False):
     need_fails = max(1, int(oc_cfg.get("failures_before_failover") or 3))
     store = get_lease_store(cfg)
     failures = 0
+    last_state = None
 
     with open(_sentinel_pid_file(), "w", encoding="utf-8") as f:
         f.write(str(os.getpid()))
+    _sentinel_log(f"started node={local_node} primary={primary} interval={interval_s}s ttl={ttl_s}s")
 
     while True:
         _reap_children()
@@ -1024,21 +942,43 @@ def run_sentinel_loop(cfg, once=False):
             # Primary yields only when sibling explicitly holds manual_leader AND its lease is still fresh
             if manual and manual != local_node and not expired:
                 if _read_pid(_oc_pid_file()):
+                    _sentinel_log(f"primary yielding to manual_leader={manual}; stopping local responder")
                     cmd_stop(cfg, release_lease=False)
+                if last_state != f"yield:{manual}":
+                    _sentinel_log(f"state=yield holder={cur_holder} manual_leader={manual}")
+                    last_state = f"yield:{manual}"
             else:
-                cmd_start(cfg, force=expired, manual_leader=None)
+                res = cmd_start(cfg, force=expired, manual_leader=None)
+                cur_state = f"primary_active:ok={res.get('ok')}"
+                if cur_state != last_state or not res.get("already_running"):
+                    _sentinel_log(f"state=primary_active expired={expired} res_ok={res.get('ok')} pid={res.get('pid')} err={res.get('error')}")
+                    last_state = cur_state
         else:
             primary_up = _probe_node_peer(cfg, primary)
             if primary_up:
+                if failures > 0:
+                    _sentinel_log(f"primary={primary} recovered after {failures} failed probes")
                 failures = 0
                 if manual == local_node:
-                    cmd_start(cfg, force=False, manual_leader=local_node)
+                    res = cmd_start(cfg, force=False, manual_leader=local_node)
+                    if last_state != "standby_manual":
+                        _sentinel_log(f"state=standby_manual holder={local_node} ok={res.get('ok')}")
+                        last_state = "standby_manual"
                 elif _read_pid(_oc_pid_file()) or (cur_holder == local_node and (lease or {}).get("state") == "LEADER"):
+                    _sentinel_log(f"fallback to primary={primary}; stopping standby responder and releasing lease")
                     cmd_stop(cfg, release_lease=True)
+                    last_state = "standby_idle"
+                elif last_state != "standby_idle":
+                    _sentinel_log(f"state=standby_idle primary={primary} holder={cur_holder}")
+                    last_state = "standby_idle"
             else:
                 failures += 1
+                _sentinel_log(f"probe failed for primary={primary} ({failures}/{need_fails}) expired={expired} manual={manual}")
                 if (manual == local_node) or (failures >= need_fails and expired):
-                    cmd_start(cfg, force=True, manual_leader=manual)
+                    _sentinel_log(f"failover triggered on {local_node} (failures={failures}, expired={expired}, manual={manual})")
+                    res = cmd_start(cfg, force=True, manual_leader=manual)
+                    _sentinel_log(f"failover start res_ok={res.get('ok')} pid={res.get('pid')} err={res.get('error')}")
+                    last_state = "standby_failover"
 
         if once:
             break
@@ -1050,6 +990,7 @@ def start_sentinel_daemon(cfg):
     if pid:
         return {"ok": True, "already_running": True, "pid": pid}
     log_path = _sentinel_log_file()
+    cluster_lib.rotate_log_if_needed(log_path)
     with open(log_path, "a", encoding="utf-8") as lf:
         proc = subprocess.Popen(
             [sys.executable, os.path.abspath(__file__), "sentinel"],
@@ -1069,7 +1010,8 @@ def extract_openclaw_secrets(config_path=None):
     cpath = config_path or openclaw_config_path()
     if not os.path.isfile(cpath):
         raise FileNotFoundError(f"OpenClaw config not found: {cpath}")
-    data = json.load(open(cpath, encoding="utf-8"))
+    with open(cpath, encoding="utf-8") as f:
+        data = json.load(f)
     bundle = {}
     tg = (data.get("channels") or {}).get("telegram")
     if isinstance(tg, dict) and tg.get("botToken"):
@@ -1099,9 +1041,11 @@ def merge_openclaw_secrets(secrets_bundle, config_path=None):
     _ensure_secure_openclaw_dir(os.path.dirname(cpath), private=True)
     data = {}
     if os.path.isfile(cpath):
-        data = json.load(open(cpath, encoding="utf-8"))
+        with open(cpath, encoding="utf-8") as f:
+            data = json.load(f)
         bak = f"{cpath}.{time.strftime('%Y%m%d-%H%M%S')}.bak"
         shutil.copy2(cpath, bak)
+        cluster_lib.prune_old_files(os.path.dirname(cpath), os.path.basename(cpath) + ".*.bak", max_age_days=14, max_count=5)
 
     synced = []
     if isinstance(secrets_bundle.get("telegram"), dict):

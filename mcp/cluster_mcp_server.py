@@ -4,13 +4,15 @@
 Focused on:
 1. Hardware, BIOS, Driver, and Stability inspection of any cluster device.
 2. Per-node LLM ceiling computation, benchmark inspection, and default-safe load/unload for tuning.
-3. Listing and delegating prompts to unified `cluster/*` (local) and `nim/*` (NVIDIA NIM cloud) role aliases via the Cluster Router Gateway (:1235).
-4. Autonomous multi-turn tool-calling orchestration via NVIDIA NIM cloud models (`nim/ultra`, `nim/fast`) across all cluster tools.
+3. Listing and delegating prompts to the 13-model catalog (`cluster/*`, `nim/*`, `gemini/*`) via the Cluster Router Gateway (:1235).
+4. Autonomous multi-turn tool-calling orchestration (`gemini/orchestrator`, `nim/ultra`, `nim/fast`) across torre, portatil, raspberrypi, and arduq.
 """
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.request
 
@@ -21,6 +23,7 @@ sys.path.insert(0, os.path.join(TOOLS_DIR, "llm"))
 sys.path.insert(0, os.path.join(TOOLS_DIR, "hw"))
 sys.path.insert(0, os.path.join(TOOLS_DIR, "peer"))
 
+import catalog  # noqa: E402
 import ceiling  # noqa: E402
 import cluster_ctl  # noqa: E402
 import cluster_lib  # noqa: E402
@@ -31,203 +34,7 @@ import peer_ctl  # noqa: E402
 
 SERVER_INFO = {"name": "cluster-hw-llm", "version": "1.4.0"}
 
-TOOLS = [
-    {
-        "name": "hw_node_profile",
-        "description": "Inspect hardware configuration, motherboard/BIOS, RAM DIMMs, GPUs (NVIDIA/Intel Arc/AMD), chipset/platform drivers, power plan (MinCPU/ASPM), VBS/HVCI/HAGS, storage, Event Log stability, and optional HWiNFO64 JSON export for a cluster node.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "node": {"type": "string", "description": "Cluster node name from cluster.local.json (defaults to local_node)."},
-                "days": {"type": "integer", "minimum": 1, "maximum": 90, "default": 14},
-                "hwinfo_path": {"type": "string", "description": "Optional path to a HWiNFO64 JSON export file."},
-            },
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "hw_gpu_telemetry",
-        "description": "Read-only GPU telemetry (nvidia-smi clocks/VRAM/power/temp/throttle/PCIe/BAR1 ReBAR plus active MSI Afterburner V/F curve flatness summary when available).",
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
-    {
-        "name": "hw_event_log_check",
-        "description": "Audit Windows System Event Log for WHEA-Logger 18/19 (with APIC IDs), nvlddmkm 153, igdkmdn, amdkmdag, Display, BugCheck, or Kernel-Power 41 events.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"hours": {"type": "integer", "minimum": 1, "maximum": 336, "default": 24}},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "llm_compute_ceiling",
-        "description": "Compute theoretical decode (c1/cN), prefill, and KV-cache ceilings for a model on a target node's hardware using tools/llm/ceiling.py.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "params": {
-                    "type": "object",
-                    "description": "Hardware and model byte/FLOP parameters matching ceiling JSON schema (bandwidth_gbs, peak_tflops, dense_gb, lm_head_gb, active_params_b, ...).",
-                },
-                "profile": {
-                    "type": "string",
-                    "description": "Optional profile folder name under profiles/<profile>/ceiling-<profile>.json (e.g. 'torre' or 'portatil') when params is omitted.",
-                },
-            },
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "node_llm_status",
-        "description": "Check live LM Studio / OpenAI server reachability, listed models, and currently loaded models on one or all configured cluster nodes.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"node": {"type": "string", "description": "Optional node name filter from cluster.local.json."}},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "node_best_configs",
-        "description": "Read verified tuned per-model serving configurations and before/after benchmarks from profiles/best-config.json.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"node": {"type": "string", "description": "Optional node name filter (e.g. 'torre' or 'portatil')."}},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "node_llm_control",
-        "description": "Safely load (default-inheriting) or unload (prefix-scoped) a model on a target cluster node for cold-load verification, benchmarking, or freeing VRAM.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["load", "unload"]},
-                "node": {"type": "string", "description": "Target cluster node name."},
-                "model_key": {"type": "string", "description": "Model identifier (required for load; optional filter for unload)."},
-            },
-            "required": ["action"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "cluster_models",
-        "description": "List unified cluster/* (local), nim/* (NVIDIA NIM cloud), and gemini/* (Gemini Pro subscription) aliases on the Cluster Router Gateway (:1235), their live resolved model & node, context length, loaded status, and active failover/anti-thrash routing.",
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
-    {
-        "name": "cluster_chat",
-        "description": "Delegate a prompt or follow-up turn to a local cluster/* alias, NVIDIA NIM nim/* alias, or Gemini Pro subscription gemini/* alias (e.g. cluster/code, nim/ultra, nim/fast, gemini/pro, gemini/flash, gemini/orchestrator) via the Cluster Router Gateway /api/v1/chat endpoint.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "prompt": {"type": "string", "description": "User prompt to send to the selected cluster model."},
-                "model": {"type": "string", "default": "cluster/code", "description": "Virtual alias (cluster/*, nim/*, or gemini/*) or concrete model id (default: cluster/code)."},
-                "system_prompt": {"type": "string", "description": "Optional system instruction."},
-                "reasoning": {"type": "string", "enum": ["off", "low", "medium", "high", "on"], "description": "Optional reasoning mode override."},
-                "previous_response_id": {"type": "string", "description": "Optional response_id from a prior turn to continue stateful chat pinned to the same node."},
-                "integrations": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Optional LM Studio MCP integrations (e.g. ['mcp/browse'] or ['browse']).",
-                },
-                "store": {"type": "boolean", "default": True, "description": "Whether LM Studio should store conversation state for previous_response_id chaining."},
-                "timeout_s": {"type": "integer", "minimum": 10, "maximum": 600, "default": 180},
-            },
-            "required": ["prompt"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "cluster_orchestrate",
-        "description": "Autonomous multi-step cloud orchestrator (zero local VRAM) supporting both Gemini Pro subscription (`gemini/orchestrator`, full native Antigravity tools + web search + cluster MCP) and NVIDIA NIM (`nim/ultra`, `nim/fast`) across torre, portatil, raspberrypi, and arduq. Returns the orchestrator's final text plus step-by-step tool_trace.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "prompt": {"type": "string", "description": "Goal the orchestrator plans and executes with the available tools."},
-                "model": {"type": "string", "default": "nim/ultra", "description": "Cloud orchestrator model ('gemini/orchestrator', 'nim/ultra', 'nim/fast', 'gemini/pro', 'gemini/flash')."},
-                "max_steps": {"type": "integer", "minimum": 1, "maximum": 12, "default": 6, "description": "Max tool executions before the orchestrator summarizes (for NIM loop)."},
-            },
-            "required": ["prompt"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "peer_status",
-        "description": "Check live reachability of the local and sibling Peer Order Daemons (:1236), agy CLI availability, offline Drive queue counts, and OpenClaw HA leader status.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"node": {"type": "string", "description": "Optional node filter (e.g. 'torre' or 'portatil')."}},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "peer_send_order",
-        "description": "Send an Antigravity order (agy -p) bidirectionally to torre or portatil across WSL, Windows, or auto via Tailscale :1236 (with automatic Google Drive offline queue fallback).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "node": {"type": "string", "description": "Target cluster node ('torre' or 'portatil')."},
-                "prompt": {"type": "string", "description": "Task or order prompt to execute on the target machine."},
-                "target_os": {"type": "string", "enum": ["auto", "wsl", "windows"], "default": "auto"},
-                "mode": {"type": "string", "enum": ["auto", "accept-edits", "plan"], "default": "auto"},
-                "agent": {"type": "string", "description": "Optional Antigravity agent name."},
-                "model": {"type": "string", "description": "Optional model override."},
-                "conversation_id": {"type": "string", "description": "Optional conversation ID to resume a multi-turn thread."},
-                "cwd": {"type": "string", "description": "Optional working directory on the target node."},
-                "wait_s": {"type": "number", "minimum": 0, "maximum": 600, "default": 0},
-                "queue_if_offline": {"type": "boolean", "default": True},
-                "reply_telegram": {"type": "boolean", "default": False},
-            },
-            "required": ["node", "prompt"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "peer_order_status",
-        "description": "Fetch status, output text, and conversation_id for a peer_send_order or peer_exec job_id (online HTTP or Google Drive completed queue).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "job_id": {"type": "string"},
-                "node": {"type": "string", "description": "Target node where the job ran ('torre' or 'portatil')."},
-            },
-            "required": ["job_id"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "peer_exec",
-        "description": "Run a shell (WSL/Linux bash) or PowerShell (Windows) command on torre or portatil via Tailscale :1236 (with offline queue fallback).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "node": {"type": "string", "description": "Target node ('torre' or 'portatil')."},
-                "command": {"type": "string", "description": "Shell or PowerShell command to execute."},
-                "target_os": {"type": "string", "enum": ["auto", "wsl", "windows"], "default": "auto"},
-                "cwd": {"type": "string"},
-                "wait_s": {"type": "number", "minimum": 0, "maximum": 300, "default": 30},
-                "timeout_s": {"type": "integer", "minimum": 5, "maximum": 600, "default": 120},
-                "queue_if_offline": {"type": "boolean", "default": True},
-            },
-            "required": ["node", "command"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "openclaw_control",
-        "description": "Inspect, start, stop, cleanly transfer Active-Standby leadership (takeover without Telegram 409 Conflict), sync Telegram secrets, or send a Telegram reply via the Antigravity-first Telegram HA responder (or optional OpenClaw gateway).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["status", "start", "stop", "takeover", "telegram_reply", "sync_secrets"]},
-                "node": {"type": "string", "description": "Optional node to run the action on (defaults to local_node)."},
-                "message": {"type": "string", "description": "Message text when action='telegram_reply'."},
-            },
-            "required": ["action"],
-            "additionalProperties": False,
-        },
-    },
-]
+TOOLS = catalog.CLUSTER_TOOL_SCHEMAS
 
 RESOURCES = [
     {"uri": "cluster://best-config", "name": "Node Best LLM Configs", "mimeType": "application/json", "description": "Verified tuned model configurations and benchmarks across cluster nodes."},
@@ -235,7 +42,7 @@ RESOURCES = [
     {"uri": "cluster://architecture", "name": "Hardware Profiler & LLM Fine-Tuner Architecture", "mimeType": "text/markdown", "description": "Two-phase hardware profiling + per-node LLM fine-tuning design."},
     {"uri": "cluster://peer-telegram", "name": "Bidirectional Peer Bridge & Telegram HA", "mimeType": "text/markdown", "description": "Cross-OS Tailscale :1236 / Drive queue bridge and Antigravity-first Telegram HA responder guide."},
     {"uri": "cluster://agent-collaboration", "name": "Cluster Subagent Collaboration Guide", "mimeType": "text/markdown", "description": "Patterns for delegating work across Antigravity and local cluster/* agents."},
-    {"uri": "cluster://user-guide", "name": "Cluster Mode User Guide", "mimeType": "text/markdown", "description": "Operator handbook for the 10-model unified Cluster Mode, orchestrators per surface, and cloud vs local working modes."},
+    {"uri": "cluster://user-guide", "name": "Cluster Mode User Guide", "mimeType": "text/markdown", "description": "Operator handbook for the 13-model unified Cluster Mode, orchestrators per surface, and cloud vs local working modes."},
 ]
 
 
@@ -287,7 +94,8 @@ def _extract_output_text(output_items, target_type):
 def _call_cluster_models(cfg):
     gw_base = _gateway_base_url(cfg)
     try:
-        req = urllib.request.Request(gw_base + "/cluster/status", method="GET")
+        hdrs = cluster_lib.gateway_auth_headers(cfg, repo_root=REPO_ROOT)
+        req = urllib.request.Request(gw_base + "/cluster/status", headers=hdrs, method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
@@ -331,10 +139,12 @@ def _call_cluster_chat(cfg, args):
 
     timeout_s = int(args.get("timeout_s") or 180)
     try:
+        hdrs = {"Content-Type": "application/json"}
+        hdrs.update(cluster_lib.gateway_auth_headers(cfg, repo_root=REPO_ROOT))
         req = urllib.request.Request(
             gw_base + "/api/v1/chat",
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=hdrs,
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:
@@ -409,7 +219,8 @@ def handle_tool(name, args):
         if not params:
             prof = args.get("profile") or cfg.get("local_node", "torre")
             p = os.path.join(REPO_ROOT, "profiles", prof, f"ceiling-{prof}.json")
-            params = json.load(open(p, encoding="utf-8"))
+            with open(p, encoding="utf-8") as f:
+                params = json.load(f)
         return ceiling.compute_ceilings(params)
     if name == "node_llm_status":
         return cluster_ctl.collect_status(cfg, node_filter=args.get("node"))
@@ -495,28 +306,58 @@ def read_resource(uri):
 
 
 def read_message(buf_in):
-    line = buf_in.readline()
-    if not line:
-        return None, None
-    s = line.decode("utf-8", "replace")
-    if s.lower().startswith("content-length:"):
-        length = int(s.split(":", 1)[1].strip())
-        while True:
-            hdr = buf_in.readline()
-            if not hdr or hdr in (b"\r\n", b"\n"):
-                break
-        body = buf_in.read(length)
-        return json.loads(body.decode("utf-8")), "lsp"
-    while not s.strip():
+    while True:
         line = buf_in.readline()
         if not line:
             return None, None
         s = line.decode("utf-8", "replace")
-    return json.loads(s), "ndjson"
+        if not s.strip():
+            continue
+        if ":" in s and not s.lstrip().startswith("{"):
+            # LSP header block in arbitrary order (Content-Type, Content-Length, etc.)
+            headers = {}
+            cur_line = s
+            while True:
+                if not cur_line.strip():
+                    break
+                if ":" in cur_line:
+                    k, v = cur_line.split(":", 1)
+                    headers[k.strip().lower()] = v.strip()
+                nxt = buf_in.readline()
+                if not nxt:
+                    return None, None
+                cur_line = nxt.decode("utf-8", "replace")
+            if "content-length" not in headers:
+                continue
+            try:
+                length = int(headers["content-length"])
+            except ValueError:
+                continue
+            if length <= 0:
+                continue
+            body = buf_in.read(length)
+            if not body:
+                return None, None
+            try:
+                return json.loads(body.decode("utf-8")), "lsp"
+            except Exception as exc:
+                return {"_parse_error": str(exc)}, "lsp"
+        try:
+            return json.loads(s), "ndjson"
+        except Exception as exc:
+            return {"_parse_error": str(exc)}, "ndjson"
 
 
-def send_message(buf_out, obj, framing):
+def send_message(buf_out, obj, framing, write_lock=None):
     raw = json.dumps(obj).encode("utf-8")
+    if write_lock is not None:
+        with write_lock:
+            _write_framed(buf_out, raw, framing)
+    else:
+        _write_framed(buf_out, raw, framing)
+
+
+def _write_framed(buf_out, raw, framing):
     if framing == "lsp":
         buf_out.write(f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii") + raw)
     else:
@@ -524,51 +365,87 @@ def send_message(buf_out, obj, framing):
     buf_out.flush()
 
 
+def _dispatch_request(msg, framing, buf_out, write_lock):
+    if "_parse_error" in msg:
+        send_message(
+            buf_out,
+            {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": f"Parse error: {msg['_parse_error']}"}},
+            framing,
+            write_lock=write_lock,
+        )
+        return
+    req_id = msg.get("id")
+    method = msg.get("method", "")
+    params = msg.get("params") or {}
+    if req_id is None:
+        return
+    try:
+        if method == "initialize":
+            proto = params.get("protocolVersion") or "2024-11-05"
+            result = {
+                "protocolVersion": proto,
+                "capabilities": {"tools": {}, "resources": {}},
+                "serverInfo": SERVER_INFO,
+            }
+        elif method == "ping":
+            result = {}
+        elif method == "tools/list":
+            result = {"tools": TOOLS}
+        elif method == "tools/call":
+            try:
+                payload = handle_tool(params["name"], params.get("arguments") or {})
+                is_err = isinstance(payload, dict) and payload.get("ok") is False and bool(payload.get("error"))
+                result = {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}]}
+                if is_err:
+                    result["isError"] = True
+            except Exception as tool_exc:
+                result = {
+                    "content": [{"type": "text", "text": json.dumps({"ok": False, "error": str(tool_exc)}, indent=2)}],
+                    "isError": True,
+                }
+        elif method == "resources/list":
+            result = {"resources": RESOURCES}
+        elif method == "resources/read":
+            result = read_resource(params["uri"])
+        elif method == "resources/templates/list":
+            result = {"resourceTemplates": []}
+        elif method == "prompts/list":
+            result = {"prompts": []}
+        else:
+            send_message(
+                buf_out,
+                {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Method not found: {method}"}},
+                framing,
+                write_lock=write_lock,
+            )
+            return
+        send_message(buf_out, {"jsonrpc": "2.0", "id": req_id, "result": result}, framing, write_lock=write_lock)
+    except Exception as exc:
+        send_message(
+            buf_out,
+            {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32000, "message": str(exc)}},
+            framing,
+            write_lock=write_lock,
+        )
+
+
 def main():
     buf_in = sys.stdin.buffer
     buf_out = sys.stdout.buffer
-    while True:
-        msg, framing = read_message(buf_in)
-        if msg is None:
-            break
-        req_id = msg.get("id")
-        method = msg.get("method", "")
-        params = msg.get("params") or {}
-        if req_id is None:
-            continue
-        try:
-            if method == "initialize":
-                proto = params.get("protocolVersion") or "2024-11-05"
-                result = {
-                    "protocolVersion": proto,
-                    "capabilities": {"tools": {}, "resources": {}},
-                    "serverInfo": SERVER_INFO,
-                }
-            elif method == "ping":
-                result = {}
-            elif method == "tools/list":
-                result = {"tools": TOOLS}
-            elif method == "tools/call":
-                payload = handle_tool(params["name"], params.get("arguments") or {})
-                result = {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}]}
-            elif method == "resources/list":
-                result = {"resources": RESOURCES}
-            elif method == "resources/read":
-                result = read_resource(params["uri"])
-            elif method == "resources/templates/list":
-                result = {"resourceTemplates": []}
-            elif method == "prompts/list":
-                result = {"prompts": []}
-            else:
-                send_message(buf_out, {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Method not found: {method}"}}, framing)
-                continue
-            send_message(buf_out, {"jsonrpc": "2.0", "id": req_id, "result": result}, framing)
-        except Exception as exc:
-            send_message(
-                buf_out,
-                {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32000, "message": str(exc)}},
-                framing,
-            )
+    write_lock = threading.Lock()
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="mcp-worker") as pool:
+        futures = []
+        while True:
+            msg, framing = read_message(buf_in)
+            if msg is None:
+                break
+            futures = [f for f in futures if not f.done()]
+            futures.append(pool.submit(_dispatch_request, msg, framing, buf_out, write_lock))
+        for f in futures:
+            try:
+                f.result()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
