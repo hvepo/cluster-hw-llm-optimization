@@ -235,6 +235,7 @@ RESOURCES = [
     {"uri": "cluster://architecture", "name": "Hardware Profiler & LLM Fine-Tuner Architecture", "mimeType": "text/markdown", "description": "Two-phase hardware profiling + per-node LLM fine-tuning design."},
     {"uri": "cluster://peer-telegram", "name": "Bidirectional Peer Bridge & Telegram HA", "mimeType": "text/markdown", "description": "Cross-OS Tailscale :1236 / Drive queue bridge and Antigravity-first Telegram HA responder guide."},
     {"uri": "cluster://agent-collaboration", "name": "Cluster Subagent Collaboration Guide", "mimeType": "text/markdown", "description": "Patterns for delegating work across Antigravity and local cluster/* agents."},
+    {"uri": "cluster://user-guide", "name": "Cluster Mode User Guide", "mimeType": "text/markdown", "description": "Operator handbook for the 10-model unified Cluster Mode, orchestrators per surface, and cloud vs local working modes."},
 ]
 
 
@@ -484,6 +485,7 @@ def read_resource(uri):
         "cluster://architecture": ("text/markdown", os.path.join(REPO_ROOT, "docs", "ARCHITECTURE.md")),
         "cluster://peer-telegram": ("text/markdown", os.path.join(REPO_ROOT, "docs", "PEER_AND_OPENCLAW.md")),
         "cluster://agent-collaboration": ("text/markdown", os.path.join(REPO_ROOT, "docs", "AGENT_COLLABORATION.md")),
+        "cluster://user-guide": ("text/markdown", os.path.join(REPO_ROOT, "docs", "USER_GUIDE.md")),
     }
     if uri not in mapping:
         raise ValueError(f"Unknown resource URI {uri!r}")

@@ -196,8 +196,8 @@ def mcp_roundtrip(framing="ndjson", live=False):
         assert tools == EXPECTED_MCP_TOOLS, f"Expected MCP tools {EXPECTED_MCP_TOOLS}, got {tools}"
         write_msg({"jsonrpc": "2.0", "id": 3, "method": "resources/list", "params": {}})
         res_uris = [r["uri"] for r in read_msg()["result"]["resources"]]
-        assert len(res_uris) == 5, f"Expected 5 resources, got {res_uris}"
-        assert "cluster://peer-telegram" in res_uris and "cluster://agent-collaboration" in res_uris
+        assert len(res_uris) == 6, f"Expected 6 resources, got {res_uris}"
+        assert "cluster://peer-telegram" in res_uris and "cluster://agent-collaboration" in res_uris and "cluster://user-guide" in res_uris
         write_msg({"jsonrpc": "2.0", "id": 31, "method": "resources/templates/list", "params": {}})
         assert read_msg()["result"] == {"resourceTemplates": []}
         write_msg({"jsonrpc": "2.0", "id": 32, "method": "prompts/list", "params": {}})
