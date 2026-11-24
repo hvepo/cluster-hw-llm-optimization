@@ -359,3 +359,74 @@ def get_api_models(base_url, timeout=8):
 def load_best_config(repo_root=None):
     root = find_repo_root(repo_root)
     return json.load(open(os.path.join(root, "profiles", "best-config.json"), encoding="utf-8"))
+
+
+def _nvidia_key_paths(home_override=None):
+    paths = []
+    if home_override:
+        paths.append(os.path.join(home_override, ".config", "nvidia_api_key"))
+        return paths
+    if os.environ.get("CLUSTER_INSTALL_POSIX_HOME"):
+        paths.append(os.path.join(os.environ["CLUSTER_INSTALL_POSIX_HOME"], ".config", "nvidia_api_key"))
+    if os.environ.get("CLUSTER_INSTALL_WIN_HOME"):
+        paths.append(os.path.join(os.environ["CLUSTER_INSTALL_WIN_HOME"], ".config", "nvidia_api_key"))
+    if paths:
+        return paths
+
+    local_home = os.path.expanduser("~")
+    paths.append(os.path.join(local_home, ".config", "nvidia_api_key"))
+    if detect_platform() == "wsl":
+        win_home = _win_userprofile_from_wsl()
+        if win_home:
+            w_p = os.path.join(win_home, ".config", "nvidia_api_key")
+            if w_p not in paths:
+                paths.append(w_p)
+    return paths
+
+
+def resolve_nvidia_api_key(cfg=None, home_override=None):
+    """Resolve NVIDIA NIM API key from env, ~/.config/nvidia_api_key (POSIX/Windows), or gitignored cluster.local.json."""
+    env_k = (os.environ.get("NVIDIA_API_KEY") or "").strip()
+    if env_k and "<" not in env_k:
+        return env_k
+    for p in _nvidia_key_paths(home_override=home_override):
+        if p and os.path.isfile(p):
+            try:
+                val = open(p, "r", encoding="utf-8", errors="ignore").read().strip()
+                if val and "<" not in val:
+                    return val
+            except OSError:
+                continue
+    if cfg is not None:
+        gw_k = str(((cfg.get("gateway") or {}).get("nvidia_api_key") or "")).strip()
+        if gw_k and "<" not in gw_k:
+            return gw_k
+    return ""
+
+
+def write_nvidia_api_key(api_key, home_override=None):
+    """Atomically store NVIDIA NIM API key in ~/.config/nvidia_api_key (0600) and mirror to Windows host on WSL."""
+    key = str(api_key or "").strip()
+    if not key:
+        return []
+    written = []
+    for p in _nvidia_key_paths(home_override=home_override):
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            tmp = f"{p}.{os.getpid()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(key + "\n")
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError:
+                pass
+            os.replace(tmp, p)
+            try:
+                os.chmod(p, 0o600)
+            except OSError:
+                pass
+            written.append(p)
+        except OSError:
+            continue
+    return written
+

@@ -11,10 +11,10 @@ Antigravity's native UI model dropdown only lists Google-managed cloud models an
 ```mermaid
 flowchart TD
     Clients["Clients (Antigravity · VS Code Copilot/Continue · OpenCode · Antigravity SDK)"]
-    PluginAgents["Plugin Custom Agents (cluster-coder · cluster-fast-agent · cluster-reasoning · cluster-vision)"]
+    PluginAgents["Plugin Custom Agents (cluster-coder · cluster-fast-agent · cluster-reasoning · cluster-vision · cluster-orchestrator)"]
     SkillsHooks["Skills & Safety Hooks (hw-node-profiler · llm-node-finetune · cluster-install-migrate · PreToolUse)"]
-    MCP["Stdio MCP Server: cluster-hw-llm (9 tools · 3 resources)"]
-    Gateway["Cluster Router Gateway: 127.0.0.1:1235 (5 protocols · cluster/* aliases · anti-thrash · sticky state)"]
+    MCP["Stdio MCP Server: cluster-hw-llm (15 tools · 3 resources)"]
+    Gateway["Cluster Router Gateway: 127.0.0.1:1235 (5 protocols · cluster/* + nim/* aliases · anti-thrash · sticky state)"]
     LMLink["LM Studio + LM Link: 127.0.0.1:1234"]
     Torre["torre (12 GiB RTX 3080 Ti CUDA)"]
     Portatil["portatil (24 GiB Intel Arc 140V Vulkan)"]
@@ -38,17 +38,17 @@ flowchart TD
 | Layer | What It Owns | How It Collaborates |
 |---|---|---|
 | **Orchestrator (Antigravity / IDE)** | Planning, reading/editing workspace files, running tests, and terminal verification | Inspects code/errors, picks the right specialist agent or MCP tool, applies approved edits, and verifies results |
-| **Plugin Custom Agents (4)** | Specialized local-cluster delegation (`cluster-coder`, `cluster-fast-agent`, `cluster-reasoning`, `cluster-vision`) | Gather focused file context (`read_file`), delegate generation to `cluster/*` via `cluster_chat`, and keep follow-ups stateful via `previous_response_id` |
+| **Plugin Custom Agents (5)** | Specialized local-cluster delegation (`cluster-coder`, `cluster-fast-agent`, `cluster-reasoning`, `cluster-vision`) + hybrid cloud+local orchestration (`cluster-orchestrator`) | Gather focused file context (`read_file`), delegate generation to `cluster/*` (or `nim/*` cloud aliases) via `cluster_chat`, orchestrate multi-node/multi-tool goals via `cluster_orchestrate` (`nim/ultra`, `nim/fast`), and keep follow-ups stateful via `previous_response_id` |
 | **Skills (3)** | Domain runbooks (`hw-node-profiler`, `llm-node-finetune`, `cluster-install-migrate`) | Teach the orchestrator two-phase hardware-first discipline, ceiling math, A/B sweep gates, and cross-OS sync |
 | **Safety Hooks (`hooks.json`)** | `SessionStart` + `PreToolUse` (`run_command` guard) | Inject active node/endpoint context on session start and block destructive LM Studio default overwrites or un-scoped `lms unload --all` |
-| **MCP Server (`cluster-hw-llm`)** | 9 tools + 3 resources across HW, tuning, and gateway chat | Exposes `hw_node_profile`, `hw_gpu_telemetry`, `hw_event_log_check`, `llm_compute_ceiling`, `node_llm_status`, `node_best_configs`, `node_llm_control`, `cluster_models`, and `cluster_chat` |
-| **Cluster Router Gateway (`:1235`)** | 5 API protocols, `cluster/*` virtual routing, anti-thrash, sticky response state | Resolves virtual aliases to live `torre` / `portatil` models, fails over automatically, and pins stateful `previous_response_id` turns to the holding node |
+| **MCP Server (`cluster-hw-llm`)** | 15 tools + 3 resources across HW, tuning, gateway chat, and cloud orchestration | Exposes `hw_node_profile`, `hw_gpu_telemetry`, `hw_event_log_check`, `llm_compute_ceiling`, `node_llm_status`, `node_best_configs`, `node_llm_control`, `cluster_models`, `cluster_chat`, and `cluster_orchestrate` |
+| **Cluster Router Gateway (`:1235`)** | 5 API protocols, `cluster/*` + `nim/*` virtual routing, anti-thrash, sticky response state | Resolves virtual aliases to live `torre` / `portatil` models and NVIDIA NIM `nim/*` cloud models, fails over automatically, and pins stateful `previous_response_id` turns to the holding node |
 
 ---
 
 ## 3. Dual-Node Home Mode vs. Laptop Failover Mode
 
-Because every agent, IDE config, and SDK script targets **virtual `cluster/*` aliases** rather than hardcoding `torre`, `t-*`, or `p-*` IDs, the exact same setup adapts automatically in both locations:
+Because every agent, IDE config, and SDK script targets the unified catalog — **virtual `cluster/*` aliases** (local dual-GPU) plus **zero-VRAM cloud `nim/*` aliases** (NVIDIA NIM, when the API key is present) — rather than hardcoding `torre`, `t-*`, `p-*`, or NVIDIA model IDs, the exact same setup adapts automatically in both locations:
 
 - **At Home (`torre` + `portatil` connected over LM Link):**
   - Heavy MoE coding and `32K` vision (`cluster/code`, `cluster/code-heavy`, `cluster/agent-heavy`, `cluster/vision-heavy`) route to `portatil`'s `24 GiB` unified memory (`30B-A3B` / `26B+MTP3`).
@@ -71,6 +71,8 @@ Because every agent, IDE config, and SDK script targets **virtual `cluster/*` al
    - `cluster-vision` checks live routes via `cluster_models` and delegates visual/UI or `32K` context prompts to `cluster/vision` or `cluster/vision-heavy`.
 5. **Hardware-First Tuning (`hw-node-profiler` -> `llm-node-finetune`):**
    - Before tuning a node, the orchestrator runs `hw_node_profile` + `hw_event_log_check` (`0` `WHEA 18/19`, `0` `nvlddmkm 153`), computes theoretical limits via `llm_compute_ceiling`, inspects `node_best_configs`, and verifies cold loads with prefix-scoped `node_llm_control` without overwriting persisted LM Studio defaults.
+6. **Cloud-Based Orchestration (`cluster-orchestrator`):**
+   - For multi-node or hybrid cloud+local goals (e.g., "check peer_status across all 4 nodes and summarize", "send an order to raspberrypi and verify"), the orchestrator delegates to `cluster_orchestrate` (default `nim/ultra`, or `nim/fast` for triage) which autonomously plans and executes `peer_status`, `peer_exec`, `peer_send_order`, `peer_order_status`, `cluster_models`, `cluster_chat`, `hw_node_profile`, `node_llm_status`, `node_best_configs`, and `openclaw_control` — zero local VRAM, with a `tool_trace` of every step it took.
 
 ---
 

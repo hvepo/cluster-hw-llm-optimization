@@ -40,6 +40,25 @@ CLIENT_MODELS = [
     {"id": "cluster/math", "name": "Cluster Math (Phi-4 14B)", "ctx": 8192, "out": 4096, "tools": False, "vision": False},
 ]
 
+# NVIDIA NIM cloud resources via the Cluster Router Gateway (:1235), gated on the NVIDIA NIM API key.
+NIM_CLIENT_MODELS = [
+    {"id": "nim/ultra", "name": "NVIDIA NIM Ultra (Nemotron-3 550B-A55B Cloud Orchestrator)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
+    {"id": "nim/fast", "name": "NVIDIA NIM Fast (Nemotron-3.5 Lightning 30B-A3B Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
+    {"id": "nim/vision", "name": "NVIDIA NIM Vision (Nemotron-3.5 Super-VL 120B-A12B Cloud VL)", "ctx": 131072, "out": 8192, "tools": True, "vision": True},
+    {"id": "nim/reasoning", "name": "NVIDIA NIM Reasoning (Nemotron-3 Nano Omni 30B-A3B Cloud CoT)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
+    {"id": "nim/code", "name": "NVIDIA NIM Code (Poolside Laguna-XS 2.1 Cloud Coder)", "ctx": 65536, "out": 8192, "tools": True, "vision": False},
+    {"id": "nim/mistral-large", "name": "NVIDIA NIM Mistral Large (Mistral Large 4 1T-A52B Cloud)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
+    {"id": "nim/kimi", "name": "NVIDIA NIM Kimi (Moonshot K3.1 Pro Long-Context Cloud)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
+    {"id": "nim/step", "name": "NVIDIA NIM Step-5 Preview (Frontier Reasoning Cloud)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
+    {"id": "nim/glm-flash", "name": "NVIDIA NIM GLM-5.3 Flash (Coding/Tool-Calling Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
+    {"id": "nim/minimax-flash", "name": "NVIDIA NIM MiniMax M3.1 Flash (Long-Context Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
+    {"id": "nim/gemma-31b", "name": "NVIDIA NIM Gemma-4 31B (Instruction/Code Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
+    {"id": "nim/embed", "name": "NVIDIA NIM Embed (Nemotron-3.5 8B Cloud Embeddings)", "ctx": 8192, "out": 0, "tools": False, "vision": False},
+]
+
+NIM_OPENAI_BASE = "https://integrate.api.nvidia.com/v1"
+NIM_OPENAI_BASE_CHAT = NIM_OPENAI_BASE + "/chat/completions"
+
 VALID_CLIENTS = {"opencode", "vscode", "continue", "lmstudio", "env", "codex"}
 
 
@@ -95,13 +114,12 @@ def setup_opencode(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
                 inst.write_json_atomic(oc_cfg, data, dry_run=dry_run)
             continue
 
-        print(f"[{os_tag}:opencode] merge provider.cluster -> {oc_cfg} ({v1_url})")
+        print(f"[{os_tag}:opencode] merge provider.cluster (+ nvidia-nim when NVIDIA NIM key present) -> {oc_cfg} ({v1_url})")
         data = inst.load_json_safe(oc_cfg, {})
         if not isinstance(data.get("provider"), dict):
             data["provider"] = {}
-        models_map = {}
-        for m in CLIENT_MODELS:
-            short_id = m["id"].split("/", 1)[1] if m["id"].startswith("cluster/") else m["id"]
+
+        def _oc_entry(m):
             entry = {
                 "id": m["id"],
                 "name": m["name"],
@@ -110,7 +128,12 @@ def setup_opencode(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             }
             if m["vision"]:
                 entry["modalities"] = {"input": ["text", "image"], "output": ["text"]}
-            models_map[short_id] = entry
+            return entry
+
+        models_map = {}
+        for m in CLIENT_MODELS:
+            short_id = m["id"].split("/", 1)[1] if m["id"].startswith("cluster/") else m["id"]
+            models_map[short_id] = _oc_entry(m)
 
         data["provider"]["cluster"] = {
             "npm": "@ai-sdk/openai-compatible",
@@ -121,6 +144,20 @@ def setup_opencode(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             },
             "models": models_map,
         }
+
+        nim_key = cluster_lib.resolve_nvidia_api_key()
+        if nim_key:
+            for m in NIM_CLIENT_MODELS:
+                models_map[m["id"]] = _oc_entry(m)
+            data["provider"]["nvidia-nim"] = {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "NVIDIA NIM Cloud (Torre + Portatil)",
+                "options": {
+                    "baseURL": NIM_OPENAI_BASE,
+                    "apiKey": nim_key,
+                },
+                "models": {m["id"]: _oc_entry(m) for m in NIM_CLIENT_MODELS},
+            }
         inst.write_json_atomic(oc_cfg, data, dry_run=dry_run)
 
 
@@ -162,12 +199,12 @@ def setup_vscode_byok(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         if not isinstance(arr, list):
             arr = []
 
-        # Drop empty stub named 'lmstudio' (id == '') or previous cluster entry, preserving all real providers.
+        # Drop empty stub named 'lmstudio' (id == '') or previous cluster entries, preserving all real providers.
         cleaned = []
         for item in arr:
             if not isinstance(item, dict):
                 continue
-            if item.get("name") == provider_name:
+            if item.get("name") in (provider_name, "NVIDIA NIM Cloud"):
                 continue
             if item.get("name") == "lmstudio" and item.get("vendor") == "customendpoint":
                 ms = item.get("models") or []
@@ -190,10 +227,31 @@ def setup_vscode_byok(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
                     "maxInputTokens": m["ctx"],
                     "maxOutputTokens": m["out"],
                 }
-                for m in CLIENT_MODELS
+                for m in CLIENT_MODELS + NIM_CLIENT_MODELS
             ],
         }
         cleaned.append(cluster_entry)
+
+        nim_key = cluster_lib.resolve_nvidia_api_key()
+        if nim_key:
+            cleaned.append({
+                "name": "NVIDIA NIM Cloud",
+                "vendor": "customendpoint",
+                "apiKey": nim_key,
+                "apiType": "chat-completions",
+                "models": [
+                    {
+                        "id": m["id"],
+                        "name": m["name"],
+                        "url": NIM_OPENAI_BASE_CHAT,
+                        "toolCalling": m["tools"],
+                        "vision": m["vision"],
+                        "maxInputTokens": m["ctx"],
+                        "maxOutputTokens": m["out"],
+                    }
+                    for m in NIM_CLIENT_MODELS
+                ],
+            })
         inst.write_json_atomic(path, cleaned, dry_run=dry_run)
 
 
@@ -276,6 +334,25 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             f"$env:CLUSTER_API_BASE = '{base}'\n"
             f"$env:CLUSTER_OPENAI_BASE = '{v1}'\n"
             f"$env:CLUSTER_LMS_API_V1 = '{api_v1}'\n"
+            "# NVIDIA NIM cloud helpers (requires %USERPROFILE%\\.config\\nvidia_api_key or $env:NVIDIA_API_KEY)\n"
+            "if (-not $env:NVIDIA_API_KEY) {\n"
+            "  $nvKeyFile = Join-Path $env:USERPROFILE '.config\\nvidia_api_key'\n"
+            "  if (Test-Path $nvKeyFile) { $env:NVIDIA_API_KEY = (Get-Content -Raw $nvKeyFile).Trim() }\n"
+            "}\n"
+            "function use-nvidia-nim {\n"
+            "  if (-not $env:NVIDIA_API_KEY) { Write-Host 'use-nvidia-nim: NVIDIA_API_KEY not set' -ForegroundColor Yellow; return 1 }\n"
+            "  $env:OPENAI_BASE_URL = 'https://integrate.api.nvidia.com/v1'\n"
+            "  $env:OPENAI_API_KEY = $env:NVIDIA_API_KEY\n"
+            "  Write-Host \"OPENAI_BASE_URL=$env:OPENAI_BASE_URL (NVIDIA NIM cloud)\"\n"
+            "}\n"
+            "function nim-chat { cluster-chat --model nim/ultra @args }\n"
+            "function nim-orchestrate { cluster-chat --orchestrate --model nim/ultra @args }\n"
+            "function nim-aider {\n"
+            "  if (-not $env:NVIDIA_API_KEY) { Write-Host 'nim-aider: NVIDIA_API_KEY not set' -ForegroundColor Yellow; return 1 }\n"
+            "  $env:OPENAI_API_BASE = 'https://integrate.api.nvidia.com/v1'\n"
+            "  $env:OPENAI_API_KEY = $env:NVIDIA_API_KEY\n"
+            "  aider --model 'openai/nim/ultra' @args\n"
+            "}\n"
             "function use-cluster-openai {\n"
             f"  $env:OPENAI_BASE_URL = '{v1}'\n"
             "  $env:OPENAI_API_KEY = 'local-cluster'\n"
@@ -328,6 +405,24 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         f'export CLUSTER_API_BASE="{base}"\n'
         f'export CLUSTER_OPENAI_BASE="{v1}"\n'
         f'export CLUSTER_LMS_API_V1="{api_v1}"\n'
+        "# NVIDIA NIM cloud helpers (requires ~/.config/nvidia_api_key or NVIDIA_API_KEY)\n"
+        'if [ -z "$NVIDIA_API_KEY" ] && [ -f "$HOME/.config/nvidia_api_key" ]; then\n'
+        '  _nim_key="$(tr -d \'\\r\\n\' < "$HOME/.config/nvidia_api_key" 2>/dev/null)"\n'
+        '  [ -n "$_nim_key" ] && export NVIDIA_API_KEY="$_nim_key"\n'
+        "  unset _nim_key\n"
+        "fi\n"
+        "use-nvidia-nim() {\n"
+        '  if [ -z "$NVIDIA_API_KEY" ]; then echo "use-nvidia-nim: NVIDIA_API_KEY not set (~/.config/nvidia_api_key or NVIDIA_API_KEY)" >&2; return 1; fi\n'
+        '  export OPENAI_BASE_URL="https://integrate.api.nvidia.com/v1"\n'
+        '  export OPENAI_API_KEY="$NVIDIA_API_KEY"\n'
+        '  echo "OPENAI_BASE_URL=$OPENAI_BASE_URL (NVIDIA NIM cloud)"\n'
+        "}\n"
+        "nim-chat() { cluster-chat --model nim/ultra \"$@\"; }\n"
+        "nim-orchestrate() { cluster-chat --orchestrate --model nim/ultra \"$@\"; }\n"
+        "nim-aider() {\n"
+        '  if [ -z "$NVIDIA_API_KEY" ]; then echo "nim-aider: NVIDIA_API_KEY not set" >&2; return 1; fi\n'
+        '  OPENAI_API_BASE="https://integrate.api.nvidia.com/v1" OPENAI_API_KEY="$NVIDIA_API_KEY" aider --model "openai/nim/ultra" "$@"\n'
+        "}\n"
         "use-cluster-openai() {\n"
         f'  export OPENAI_BASE_URL="{v1}"\n'
         '  export OPENAI_API_KEY="local-cluster"\n'
@@ -367,46 +462,67 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             os.chmod(shim_path, 0o755)
 
 
+def _strip_block(txt, start, end):
+    if start in txt and end in txt:
+        pre = txt.split(start, 1)[0].rstrip()
+        post = txt.split(end, 1)[1].lstrip()
+        return (pre + "\n\n" + post).strip() + "\n" if (pre or post) else ""
+    return txt
+
+
 def setup_codex(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
     codex_dir = os.path.join(ctx["home_local"], ".codex")
     cfg_path = os.path.join(codex_dir, "config.toml")
     marker_start = "# BEGIN cluster-hw-llm"
     marker_end = "# END cluster-hw-llm"
+    nim_marker_start = "# BEGIN cluster-nim"
+    nim_marker_end = "# END cluster-nim"
 
     if uninstall:
         if not os.path.isfile(cfg_path):
             return
         txt = open(cfg_path, encoding="utf-8").read()
-        if marker_start in txt and marker_end in txt:
-            pre = txt.split(marker_start, 1)[0].rstrip()
-            post = txt.split(marker_end, 1)[1].lstrip()
-            new_txt = (pre + "\n\n" + post).strip() + "\n" if (pre or post) else ""
-            print(f"[{os_tag}:codex] remove cluster block from {cfg_path}")
+        new_txt = _strip_block(txt, marker_start, marker_end)
+        new_txt = _strip_block(new_txt, nim_marker_start, nim_marker_end)
+        if new_txt != txt:
+            print(f"[{os_tag}:codex] remove cluster blocks from {cfg_path}")
             if not dry_run:
                 with open(cfg_path, "w", encoding="utf-8") as f:
                     f.write(new_txt)
         return
 
     v1 = endpoint.rstrip("/") + "/v1"
-    block = (
-        f"{marker_start}\n"
-        "[model_providers.cluster]\n"
-        'name = "Local Cluster (Torre + Portatil)"\n'
-        f'base_url = "{v1}"\n'
-        'env_key = "CLUSTER_API_KEY"\n'
-        'wire_api = "responses"\n'
-        f"{marker_end}\n"
-    )
-    print(f"[{os_tag}:codex] configure [model_providers.cluster] -> {cfg_path}")
+    blocks = [
+        (
+            f"{marker_start}\n"
+            "[model_providers.cluster]\n"
+            'name = "Local Cluster (Torre + Portatil)"\n'
+            f'base_url = "{v1}"\n'
+            'env_key = "CLUSTER_API_KEY"\n'
+            'wire_api = "responses"\n'
+            f"{marker_end}\n"
+        )
+    ]
+    nim_key = cluster_lib.resolve_nvidia_api_key()
+    if nim_key:
+        blocks.append(
+            (
+                f"{nim_marker_start}\n"
+                "[model_providers.nvidia]\n"
+                'name = "NVIDIA NIM Cloud (Zero Local VRAM)"\n'
+                f'base_url = "{NIM_OPENAI_BASE}"\n'
+                'env_key = "NVIDIA_API_KEY"\n'
+                'wire_api = "responses"\n'
+                f"{nim_marker_end}\n"
+            )
+        )
+    print(f"[{os_tag}:codex] configure [model_providers.cluster]{' + [model_providers.nvidia]' if nim_key else ''} -> {cfg_path}")
     if not dry_run:
         os.makedirs(codex_dir, exist_ok=True)
         existing = open(cfg_path, encoding="utf-8").read() if os.path.isfile(cfg_path) else ""
-        if marker_start in existing and marker_end in existing:
-            pre = existing.split(marker_start, 1)[0].rstrip()
-            post = existing.split(marker_end, 1)[1].lstrip()
-            out = (pre + "\n\n" if pre else "") + block + (("\n" + post) if post else "")
-        else:
-            out = (existing.rstrip() + "\n\n" if existing.strip() else "") + block
+        pre = _strip_block(existing, marker_start, marker_end)
+        pre = _strip_block(pre, nim_marker_start, nim_marker_end)
+        out = (pre.rstrip() + "\n\n" if pre.strip() else "") + "\n\n".join(blocks)
         with open(cfg_path, "w", encoding="utf-8") as f:
             f.write(out)
 

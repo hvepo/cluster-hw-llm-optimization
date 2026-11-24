@@ -4,7 +4,8 @@
 Focused on:
 1. Hardware, BIOS, Driver, and Stability inspection of any cluster device.
 2. Per-node LLM ceiling computation, benchmark inspection, and default-safe load/unload for tuning.
-3. Listing and delegating prompts to unified `cluster/*` role aliases via the Cluster Router Gateway (:1235).
+3. Listing and delegating prompts to unified `cluster/*` (local) and `nim/*` (NVIDIA NIM cloud) role aliases via the Cluster Router Gateway (:1235).
+4. Autonomous multi-turn tool-calling orchestration via NVIDIA NIM cloud models (`nim/ultra`, `nim/fast`) across all cluster tools.
 """
 import json
 import os
@@ -25,9 +26,10 @@ import cluster_ctl  # noqa: E402
 import cluster_lib  # noqa: E402
 import gpu_oc_verify  # noqa: E402
 import hardware_probe  # noqa: E402
+import nim_orchestrator  # noqa: E402
 import peer_ctl  # noqa: E402
 
-SERVER_INFO = {"name": "cluster-hw-llm", "version": "1.3.0"}
+SERVER_INFO = {"name": "cluster-hw-llm", "version": "1.4.0"}
 
 TOOLS = [
     {
@@ -109,17 +111,17 @@ TOOLS = [
     },
     {
         "name": "cluster_models",
-        "description": "List unified cluster/* virtual role aliases on the Cluster Router Gateway (:1235), their live resolved model & node (torre vs portatil), context length, loaded status, and active failover/anti-thrash routing.",
+        "description": "List unified cluster/* (local) and nim/* (NVIDIA NIM cloud) aliases on the Cluster Router Gateway (:1235), their live resolved model & node (torre vs portatil), context length, loaded status, and active failover/anti-thrash routing.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
         "name": "cluster_chat",
-        "description": "Delegate a prompt or follow-up turn to a local cluster/* model alias (e.g. cluster/code, cluster/fast-agent, cluster/reasoning, cluster/vision-heavy) via the Cluster Router Gateway /api/v1/chat endpoint.",
+        "description": "Delegate a prompt or follow-up turn to a local cluster/* model alias or a cloud nim/* alias (e.g. cluster/code, cluster/fast-agent, cluster/reasoning, cluster/vision-heavy, nim/ultra, nim/fast) via the Cluster Router Gateway /api/v1/chat endpoint. nim/* requires the NVIDIA NIM API key; store=true and previous_response_id work for both.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "prompt": {"type": "string", "description": "User prompt to send to the selected cluster model."},
-                "model": {"type": "string", "default": "cluster/code", "description": "Virtual alias (cluster/*) or concrete t-*/p-* model ID (default: cluster/code)."},
+                "model": {"type": "string", "default": "cluster/code", "description": "Virtual alias (cluster/* or nim/*) or concrete t-*/p-*/nvidia/id (default: cluster/code). nim/* requires the NVIDIA NIM API key."},
                 "system_prompt": {"type": "string", "description": "Optional system instruction."},
                 "reasoning": {"type": "string", "enum": ["off", "low", "medium", "high", "on"], "description": "Optional reasoning mode override."},
                 "previous_response_id": {"type": "string", "description": "Optional response_id from a prior turn to continue stateful chat pinned to the same node."},
@@ -130,6 +132,20 @@ TOOLS = [
                 },
                 "store": {"type": "boolean", "default": True, "description": "Whether LM Studio should store conversation state for previous_response_id chaining."},
                 "timeout_s": {"type": "integer", "minimum": 10, "maximum": 600, "default": 180},
+            },
+            "required": ["prompt"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "cluster_orchestrate",
+        "description": "Autonomous multi-step tool-calling orchestrator (NVIDIA NIM cloud, zero local VRAM) that plans and executes cluster-horizontal goals across all cluster/* local and nim/* cloud models on torre, portatil, raspberrypi, and arduq: peer_status, peer_exec, peer_send_order, peer_order_status, cluster_models, cluster_chat, hw_node_profile, node_llm_status, node_best_configs, openclaw_control. Returns the orchestrator's final text plus a step-by-step tool_trace.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "Goal the orchestrator plans and executes with the available tools."},
+                "model": {"type": "string", "default": "nim/ultra", "description": "NVIDIA NIM orchestrator model (e.g. 'nim/ultra', 'nim/fast'). The orchestrator may also delegate a sub-task to a local cluster/* alias."},
+                "max_steps": {"type": "integer", "minimum": 1, "maximum": 12, "default": 6, "description": "Max tool executions before the orchestrator summarizes."},
             },
             "required": ["prompt"],
             "additionalProperties": False,
@@ -362,6 +378,13 @@ def _call_cluster_chat(cfg, args):
     return result
 
 
+def _orchestrator_executor(name, args):
+    """Tool executor for the NIM orchestrator loop; recursion into cluster_orchestrate is blocked."""
+    if name == "cluster_orchestrate":
+        return {"ok": False, "error": "cluster_orchestrate is not available to the orchestrator itself (recursion guard)"}
+    return handle_tool(name, args)
+
+
 def handle_tool(name, args):
     cfg = cluster_lib.load_cluster_config(REPO_ROOT)
     if name == "hw_node_profile":
@@ -407,6 +430,13 @@ def handle_tool(name, args):
         return _call_cluster_models(cfg)
     if name == "cluster_chat":
         return _call_cluster_chat(cfg, args)
+    if name == "cluster_orchestrate":
+        return nim_orchestrator.run_orchestrator(
+            prompt=args["prompt"],
+            model=args.get("model") or nim_orchestrator.ORCH_DEFAULT_MODEL,
+            max_steps=args.get("max_steps") or nim_orchestrator.ORCH_DEFAULT_MAX_STEPS,
+            tool_executor=_orchestrator_executor,
+        )
     if name == "peer_status":
         return peer_ctl.collect_status(cfg, node_filter=args.get("node"))
     if name == "peer_send_order":

@@ -22,7 +22,7 @@ import tempfile
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 EXPECTED_SKILLS = {"hw-node-profiler", "llm-node-finetune", "cluster-install-migrate", "cluster-ops-bridge"}
-EXPECTED_AGENTS = {"cluster-coder.md", "cluster-fast-agent.md", "cluster-reasoning.md", "cluster-vision.md"}
+EXPECTED_AGENTS = {"cluster-coder.md", "cluster-fast-agent.md", "cluster-orchestrator.md", "cluster-reasoning.md", "cluster-vision.md"}
 EXPECTED_MCP_TOOLS = {
     "hw_node_profile",
     "hw_gpu_telemetry",
@@ -33,6 +33,7 @@ EXPECTED_MCP_TOOLS = {
     "node_llm_control",
     "cluster_models",
     "cluster_chat",
+    "cluster_orchestrate",
     "peer_status",
     "peer_send_order",
     "peer_order_status",
@@ -1133,6 +1134,7 @@ def check_privacy(files):
         ("hardcoded_user_path", re.compile(r"(?:/home/|C:\\\\?Users\\\\?)(?!<USER>)[A-Za-z0-9_.-]{2,}")),
         ("github_token", re.compile(r"\b(?:ghp|gho|github_pat)_[A-Za-z0-9_]{12,}\b")),
         ("openai_token", re.compile(r"\bsk-[A-Za-z0-9]{20,}\b")),
+        ("nvidia_token", re.compile(r"\bnvapi-[A-Za-z0-9_-]{20,}\b")),
         ("bearer_token", re.compile(r"Bearer\s+[A-Za-z0-9._-]{16,}")),
     ]
 

@@ -3,11 +3,24 @@
 
 Supports stateful conversation chaining (`previous_response_id`), MCP `integrations`
 (`mcp/browse`, `mcp/cluster-hw-llm`, etc.), and live SSE streaming with `tok/s` telemetry.
+
+With `--orchestrate`, runs the NVIDIA NIM autonomous multi-turn tool-calling
+orchestrator (`cluster_orchestrate`) instead of a plain chat turn.
 """
 import argparse
 import json
+import os
 import sys
 import urllib.request
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir))
+for _d in (os.path.join(REPO_ROOT, "tools"), os.path.join(REPO_ROOT, "mcp")):
+    if _d not in sys.path:
+        sys.path.insert(0, _d)
+
+import cluster_lib  # noqa: E402
+import cluster_mcp_server  # noqa: E402
+import nim_orchestrator  # noqa: E402
 
 
 def stream_native_chat(
@@ -86,17 +99,52 @@ def stream_native_chat(
     }
 
 
+def _run_orchestrate_turn(ap, args):
+    """Run the NIM multi-turn tool-calling orchestrator loop (see nim_orchestrator.run_orchestrator)."""
+    if not args.prompt:
+        ap.error("Provide a prompt when using --orchestrate")
+    cluster_lib.load_cluster_config(REPO_ROOT)
+
+    def _exec(name, targs):
+        if name == "cluster_orchestrate":
+            return {"ok": False, "error": "cluster_orchestrate is not available to the orchestrator itself (recursion guard)"}
+        return cluster_mcp_server.handle_tool(name, targs)
+
+    res = nim_orchestrator.run_orchestrator(
+        prompt=args.prompt,
+        model=args.model,
+        max_steps=args.max_steps,
+        tool_executor=_exec,
+    )
+    for step in res.get("tool_trace") or []:
+        print(f"[orch] step {step['step']}: {step['tool']}({json.dumps(step.get('args') or {})[:160]})", file=sys.stderr)
+    if res.get("text"):
+        print(res["text"])
+    print(f"[orchestrate model={res.get('orchestrator_model')} resolved={res.get('resolved_model')} steps={res.get('steps_executed')}]", file=sys.stderr)
+    if not res.get("ok"):
+        print(res.get("error") or "orchestration failed", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Native LM Studio /api/v1/chat client via Cluster Router Gateway")
     ap.add_argument("prompt", nargs="?", help="User prompt (optional when --stateful interactive loop is used)")
-    ap.add_argument("--model", default="cluster/code", help="Model or cluster/* alias (default: cluster/code)")
+    ap.add_argument("--model", default=None, help="Model or cluster*/nim* alias (default: cluster/code; nim/ultra when --orchestrate is passed)")
     ap.add_argument("--gateway", default="http://127.0.0.1:1235", help="Gateway base URL")
     ap.add_argument("--system", dest="system_prompt", help="Optional system prompt")
     ap.add_argument("--mcp", action="append", default=[], help="MCP server name (e.g. browse, cluster-hw-llm) or mcp/<name>")
     ap.add_argument("--reasoning", choices=("off", "low", "medium", "high", "on"), help="Reasoning mode")
     ap.add_argument("--previous-response-id", help="Resume stateful conversation from response_id")
     ap.add_argument("--stateful", action="store_true", help="Keep interactive stateful chat loop chaining previous_response_id")
+    ap.add_argument("--orchestrate", action="store_true", help="Run as an autonomous multi-turn tool-calling orchestrator via NVIDIA NIM")
+    ap.add_argument("--max-steps", type=int, default=nim_orchestrator.ORCH_DEFAULT_MAX_STEPS, help="Max tool executions in --orchestrate mode (default: 6)")
     args = ap.parse_args(argv)
+
+    if args.model is None:
+        args.model = "nim/ultra" if args.orchestrate else "cluster/code"
+    if args.orchestrate:
+        return _run_orchestrate_turn(ap, args)
 
     integrations = [m if m.startswith(("mcp/", "ephemeral_mcp")) else f"mcp/{m}" for m in args.mcp]
     prev_id = args.previous_response_id

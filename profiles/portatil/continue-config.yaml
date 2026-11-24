@@ -120,6 +120,141 @@ models:
       contextLength: 2048
     roles:
       - embed
+  - name: NVIDIA NIM Ultra (Nemotron-3 550B-A55B Cloud Orchestrator)
+    provider: lmstudio
+    model: nim/ultra
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 131072
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: NVIDIA NIM Fast (Nemotron-3.5 Lightning 30B-A3B Cloud)
+    provider: lmstudio
+    model: nim/fast
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 131072
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: NVIDIA NIM Vision (Nemotron-3.5 Super-VL 120B-A12B Cloud VL)
+    provider: lmstudio
+    model: nim/vision
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 131072
+    roles:
+      - chat
+    capabilities:
+      - tool_use
+      - image_input
+  - name: NVIDIA NIM Reasoning (Nemotron-3 Nano Omni 30B-A3B Cloud CoT)
+    provider: lmstudio
+    model: nim/reasoning
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 131072
+    roles:
+      - chat
+    capabilities:
+      - tool_use
+  - name: NVIDIA NIM Code (Poolside Laguna-XS 2.1 Cloud Coder)
+    provider: lmstudio
+    model: nim/code
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 65536
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: NVIDIA NIM Mistral Large (Mistral Large 4 1T-A52B Frontier Cloud)
+    provider: lmstudio
+    model: nim/mistral-large
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 131072
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: NVIDIA NIM Kimi (Moonshot K3.1 Pro Long-Context Cloud)
+    provider: lmstudio
+    model: nim/kimi
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 131072
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: NVIDIA NIM Step-5 Preview (Frontier Reasoning Cloud)
+    provider: lmstudio
+    model: nim/step
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 131072
+    roles:
+      - chat
+    capabilities:
+      - tool_use
+  - name: NVIDIA NIM GLM-5.3 Flash (High-Speed Coding/Tool-Calling Cloud)
+    provider: lmstudio
+    model: nim/glm-flash
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 131072
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: NVIDIA NIM MiniMax M3.1 Flash (High-Speed Long-Context Cloud)
+    provider: lmstudio
+    model: nim/minimax-flash
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 131072
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: NVIDIA NIM Gemma-4 31B (Instruction/Code Cloud)
+    provider: lmstudio
+    model: nim/gemma-31b
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 131072
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: NVIDIA NIM Embed (Nemotron-3.5 8B Cloud Embeddings)
+    provider: lmstudio
+    model: nim/embed
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 8192
+    roles:
+      - embed
 
 mcpServers:
   - name: cluster-hw-llm

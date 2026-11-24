@@ -404,16 +404,101 @@ def configure_openclaw(cfg=None, config_path=None):
                 "contextWindow": 32768,
                 "maxTokens": 2048,
             },
+            {
+                "id": "nim/ultra",
+                "name": "NVIDIA NIM Ultra (Nemotron-3 550B-A55B Cloud Orchestrator)",
+                "api": "openai-completions",
+                "contextWindow": 131072,
+                "maxTokens": 16384,
+            },
+            {
+                "id": "nim/fast",
+                "name": "NVIDIA NIM Fast (Nemotron-3.5 30B-A3B Cloud Lightning)",
+                "api": "openai-completions",
+                "contextWindow": 131072,
+                "maxTokens": 8192,
+            },
+            {
+                "id": "nim/vision",
+                "name": "NVIDIA NIM Vision (Nemotron-3.5 120B-A12B Cloud VL)",
+                "api": "openai-completions",
+                "contextWindow": 131072,
+                "maxTokens": 8192,
+            },
+            {
+                "id": "nim/reasoning",
+                "name": "NVIDIA NIM Reasoning (Nemotron-3 30B-A3B Cloud CoT)",
+                "api": "openai-completions",
+                "contextWindow": 131072,
+                "maxTokens": 8192,
+            },
+            {
+                "id": "nim/code",
+                "name": "NVIDIA NIM Code (Poolside Laguna-XS Cloud Coder)",
+                "api": "openai-completions",
+                "contextWindow": 65536,
+                "maxTokens": 8192,
+            },
         ],
     }
+
+    nv_key = cluster_lib.resolve_nvidia_api_key(cfg)
+    if nv_key:
+        providers["nvidia-nim"] = {
+            "baseUrl": "https://integrate.api.nvidia.com/v1",
+            "apiKey": nv_key,
+            "api": "openai-completions",
+            "models": [
+                {
+                    "id": "nvidia/nemotron-3-ultra-550b-a55b",
+                    "name": "NVIDIA Nemotron-3 Ultra 550B-A55B",
+                    "api": "openai-completions",
+                    "contextWindow": 131072,
+                    "maxTokens": 16384,
+                },
+                {
+                    "id": "nvidia/nemotron-3.5-lightning-30b-a3b",
+                    "name": "NVIDIA Nemotron-3.5 Lightning 30B-A3B",
+                    "api": "openai-completions",
+                    "contextWindow": 131072,
+                    "maxTokens": 8192,
+                },
+                {
+                    "id": "nvidia/nemotron-3.5-super-vl-120b-a12b",
+                    "name": "NVIDIA Nemotron-3.5 Super-VL 120B-A12B",
+                    "api": "openai-completions",
+                    "contextWindow": 131072,
+                    "maxTokens": 8192,
+                },
+                {
+                    "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+                    "name": "NVIDIA Nemotron-3 Nano Omni 30B-A3B Reasoning",
+                    "api": "openai-completions",
+                    "contextWindow": 131072,
+                    "maxTokens": 8192,
+                },
+                {
+                    "id": "poolside/laguna-xs-2.1",
+                    "name": "Poolside Laguna-XS 2.1",
+                    "api": "openai-completions",
+                    "contextWindow": 65536,
+                    "maxTokens": 8192,
+                },
+            ],
+        }
 
     agents_sec = data.setdefault("agents", {})
     defaults = agents_sec.setdefault("defaults", {})
     ws_dir = defaults.get("workspace") or os.path.join(os.path.dirname(cpath), "workspace")
     defaults["workspace"] = ws_dir
     prev_model = defaults.get("model") or {}
-    prev_fbs = [f for f in (prev_model.get("fallbacks") or []) if not str(f).startswith("cluster-local/")]
-    fallbacks = ["cluster-local/cluster/code", "cluster-local/cluster/fast-agent"] + prev_fbs
+    prev_fbs = [f for f in (prev_model.get("fallbacks") or []) if not str(f).startswith(("cluster-local/", "nvidia-nim/"))]
+    fallbacks = [
+        "cluster-local/nim/ultra",
+        "cluster-local/nim/fast",
+        "cluster-local/cluster/code",
+        "cluster-local/cluster/fast-agent",
+    ] + prev_fbs
     defaults["model"] = {
         "primary": "cluster-local/cluster/vision-heavy",
         "fallbacks": fallbacks,
@@ -1013,6 +1098,9 @@ def extract_openclaw_secrets(config_path=None):
     media = (data.get("tools") or {}).get("media")
     if isinstance(media, dict) and media:
         bundle["tools_media"] = media
+    nv_key = cluster_lib.resolve_nvidia_api_key()
+    if nv_key:
+        bundle["nvidia_api_key"] = nv_key
     return bundle
 
 
@@ -1044,6 +1132,11 @@ def merge_openclaw_secrets(secrets_bundle, config_path=None):
     if isinstance(secrets_bundle.get("tools_media"), dict):
         data.setdefault("tools", {})["media"] = secrets_bundle["tools_media"]
         synced.append("tools.media")
+    nv_key = str(secrets_bundle.get("nvidia_api_key") or "").strip()
+    if nv_key:
+        if not os.environ.get("OPENCLAW_HOME"):
+            cluster_lib.write_nvidia_api_key(nv_key)
+        synced.append("nvidia_api_key")
 
     with open(cpath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)

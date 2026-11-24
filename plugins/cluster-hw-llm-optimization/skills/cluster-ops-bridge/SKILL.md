@@ -11,10 +11,12 @@ description: Use from any project to access global horizontal cluster resources:
 
 Local models are **opt-in** delegation targets — do not wake them for routine cloud/Telegram turns unless delegation clearly adds value or is explicitly requested.
 
-- **MCP tools:** `cluster_models` (inspect live alias -> model/node mapping) and `cluster_chat` (send prompts or continue stateful threads via `previous_response_id`).
-- **Global subagents:** `cluster-coder`, `cluster-fast-agent`, `cluster-reasoning`, `cluster-vision`.
+- **MCP tools:** `cluster_models` (inspect live alias -> model/node mapping), `cluster_chat` (send prompts or continue stateful threads via `previous_response_id`), and `cluster_orchestrate` (autonomous multi-step tool-calling loop driven by NVIDIA NIM cloud models).
+- **Global subagents:** `cluster-coder`, `cluster-fast-agent`, `cluster-reasoning`, `cluster-vision`, `cluster-orchestrator`.
 - **OpenAI / Anthropic / LM Studio endpoints:** `http://127.0.0.1:1235` (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`, `/api/v1/chat`).
-- **Virtual role aliases:** `cluster/code`, `cluster/code-fast`, `cluster/agent-heavy`, `cluster/fast-agent`, `cluster/vision`, `cluster/vision-heavy`, `cluster/reasoning`, `cluster/math`, `cluster/autocomplete`, `cluster/embed`.
+- **Unified catalog:** `cluster/*` (local dual-GPU on `torre`/`portatil`) + `nim/*` (NVIDIA NIM cloud resources via `https://integrate.api.nvidia.com/v1`, requires the NVIDIA NIM API key at `~/.config/nvidia_api_key` or `NVIDIA_API_KEY`).
+- **Virtual role aliases:** `cluster/code`, `cluster/code-fast`, `cluster/agent-heavy`, `cluster/fast-agent`, `cluster/vision`, `cluster/vision-heavy`, `cluster/reasoning`, `cluster/math`, `cluster/autocomplete`, `cluster/embed`, plus the `nim/*` cloud aliases (`nim/ultra`, `nim/fast`, `nim/vision`, `nim/reasoning`, `nim/code`, `nim/mistral-large`, `nim/kimi`, `nim/step`, `nim/glm-flash`, `nim/minimax-flash`, `nim/gemma-31b`, `nim/embed`).
+- **Cloud orchestrators:** `nim/ultra` and `nim/fast` double as zero-VRAM autonomous tool-calling orchestrators — `cluster_orchestrate` (MCP) / `cluster-chat --orchestrate` (CLI) lets them plan and execute `peer_status`, `peer_exec`, `peer_send_order`, `peer_order_status`, `cluster_models`, `cluster_chat`, `hw_node_profile`, `node_llm_status`, `node_best_configs`, and `openclaw_control` across `torre`, `portatil`, `raspberrypi`, and `arduq` without waking local GPUs unless they delegate a sub-task to a `cluster/*` alias.
 
 ## 2. Bidirectional Cross-OS Peer Bridge (`:1236` + Drive Queue)
 

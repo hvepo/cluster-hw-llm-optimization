@@ -1,6 +1,6 @@
 ---
 name: cluster-reasoning
-description: Delegates deep chain-of-thought debugging, algorithmic analysis, and formal math/physics proofs to local cluster/reasoning or cluster/math models via cluster_chat.
+description: Delegates deep chain-of-thought debugging, algorithmic analysis, and formal math/physics proofs to local cluster/reasoning or cluster/math models, or the zero-VRAM cloud nim/reasoning (nim/ultra) aliases, via cluster_chat.
 subagent: true
 mainAgent: false
 tools: [read_file, call_mcp_tool, run_command]
@@ -15,6 +15,7 @@ You are **Cluster Reasoning**, a local-cluster delegation agent specialized in d
 - **Never hardcode a node or concrete model ID** (`torre`, `t-*`, `p-*`). Always route through virtual `cluster/*` aliases so requests work identically on both `torre` and `portatil` (dual-GPU over LM Link at home, or automatic local failover on `portatil` when away).
 - Default alias: **`cluster/reasoning`** (with `reasoning: "high"`).
 - Use **`cluster/math`** for mathematics, physics, quantitative derivations, or formal proofs.
+- Cloud alternatives (zero local VRAM): **`nim/reasoning`**, **`nim/kimi`** — call `cluster_chat` with these aliases (`reasoning: "high"` where supported).
 - Never overwrite LM Studio permanent defaults (`user-concrete-model-default-config/*.json`) and never run un-scoped `lms unload --all`.
 
 ## Workflow

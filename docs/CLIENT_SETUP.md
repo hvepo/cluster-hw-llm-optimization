@@ -12,7 +12,9 @@ The **Cluster Router Gateway** ([cluster_gateway.py](../tools/gateway/cluster_ga
    - Legacy LM Studio API (`/api/v0/models`)
 2. **Option B Smart-First Virtual Role Aliases (`cluster/*`) + Automatic Failover:**
    - Both computers online -> true dual-GPU split; either computer asleep/away -> seamless automatic failover to the online machine.
-3. **Anti-Thrash VRAM Guardrails:**
+3. **NVIDIA NIM Cloud Aliases (`nim/*`) + Zero-VRAM Cloud Orchestrators:**
+   - When the NVIDIA NIM API key is present, the gateway proxies NVIDIA NIM models (`nim/ultra`, `nim/fast`, `nim/vision`, `nim/reasoning`, `nim/code`, `nim/mistral-large`, `nim/kimi`, `nim/step`, `nim/glm-flash`, `nim/minimax-flash`, `nim/gemma-31b`, `nim/embed`) over `https://integrate.api.nvidia.com/v1` as ordinary chat/agent models, and `nim/ultra`/`nim/fast` also act as autonomous tool-calling orchestrators (`cluster_orchestrate`).
+4. **Anti-Thrash VRAM Guardrails:**
    - If `torre` currently holds a heavy `12B–15B` model, `cluster/autocomplete` and `cluster/embed` automatically divert to `portatil` instead of triggering LM Studio's `unloadPreviousJITModelOnLoad` eviction.
 
 ---
@@ -60,12 +62,29 @@ python3 tools/gateway/gateway_ctl.py status
 
 *(You can always request concrete `t-*` or `p-*` IDs directly too.)*
 
+**NVIDIA NIM Cloud Alias Table (requires the NVIDIA NIM API key; zero local VRAM):**
+
+| Alias | Role | Model (NVIDIA) | Context / Out |
+|---|---|---|---|
+| `nim/ultra` | Flagship cloud orchestrator (tool-calling) | `nvidia/nemotron-3-ultra-550b-a55b` | `131072` / `16384` |
+| `nim/fast` | Fast cloud agent/orchestrator (tool-calling) | `nvidia/nemotron-3.5-lightning-30b-a3b` | `131072` / `8192` |
+| `nim/vision` | Multimodal cloud vision (Super-VL 120B) | `nvidia/nemotron-3.5-super-vl-120b-a12b` | `131072` / `8192` |
+| `nim/reasoning` | Cloud chain-of-thought reasoning | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | `131072` / `8192` |
+| `nim/code` | Cloud fast code completion (Laguna-XS 2.1) | `poolside/laguna-xs-2.1` | `65536` / `8192` |
+| `nim/mistral-large` | Cloud frontier general/code (Mistral Large 4 1T-A52B) | `mistralai/mistral-large-4-1t-a52b` | `131072` / `16384` |
+| `nim/kimi` | Cloud long-context reasoning/code (K3.1 Pro) | `moonshotai/kimi-k3.1-pro` | `131072` / `16384` |
+| `nim/step` | Cloud frontier reasoning (Step-5 Preview) | `stepfun-ai/step-5-preview` | `131072` / `16384` |
+| `nim/glm-flash` | Cloud fast coding/agent (GLM-5.3 Flash) | `z-ai/glm-5.3-flash` | `131072` / `8192` |
+| `nim/minimax-flash` | Cloud fast long-context (MiniMax M3.1 Flash) | `minimaxai/minimax-m3.1-flash` | `131072` / `8192` |
+| `nim/gemma-31b` | Cloud instruction/code (Gemma-4 31B) | `google/gemma-4-31b-it` | `131072` / `8192` |
+| `nim/embed` | Cloud semantic embeddings (Nemotron-3.5 8B) | `nvidia/nemotron-3.5-embed-8b` | `8192` |
+
 ---
 
 ## Per-Client Integration Guide
 
 ### 1. OpenCode (`v2.3.2+`, WSL & Windows)
-`setup_clients.py` registers provider **`cluster`** (`@ai-sdk/openai-compatible` -> `http://127.0.0.1:1235/v1`) in `opencode.json`.
+`setup_clients.py` registers provider **`cluster`** (`@ai-sdk/openai-compatible` -> `http://127.0.0.1:1235/v1`) in `opencode.json` — unified catalog of `cluster/*` local aliases plus `nim/*` cloud aliases when the NVIDIA NIM key is present. When the key exists, it also registers provider **`nvidia-nim`** (`https://integrate.api.nvidia.com/v1`) so `opencode run --model nim/ultra "Explain this module"` works with zero local VRAM, and selecting `nim/ultra`/`nim/fast` in any chat/agent gives it the `cluster-hw-llm` MCP tools (see Section 7).
 ```bash
 opencode models
 opencode run --model cluster/code "Explain this module"
@@ -73,8 +92,8 @@ opencode run --model cluster/code "Explain this module"
 ```
 
 ### 2. VS Code Copilot BYOK & Built-in MCP
-`install.py` registers **`cluster-hw-llm`** (9 tools, 3 resources) in `mcp.json` (and re-enables `"chat.disableAIFeatures": false` if disabled), while `setup_clients.py` populates **`Local Cluster (LM Link)`** in `chatLanguageModels.json` without touching cloud providers.
-- Open **Copilot Chat** -> Model Picker -> select any `Cluster *` model (`Cluster Code`, `Cluster Fast Agent`, `Cluster Vision Heavy`, etc.) and attach `cluster-hw-llm` tools/resources.
+`install.py` registers **`cluster-hw-llm`** (15 tools, 3 resources) in `mcp.json` (and re-enables `"chat.disableAIFeatures": false` if disabled), while `setup_clients.py` populates **`Local Cluster (LM Link)`** (`cluster/*` + `nim/*`) in `chatLanguageModels.json` without touching cloud providers. When the NVIDIA NIM key is present, it also registers the **`NVIDIA NIM Cloud`** entry pointing at `https://integrate.api.nvidia.com/v1/chat/completions`.
+- Open **Copilot Chat** -> Model Picker -> select any `Cluster *` model (`Cluster Code`, `Cluster Fast Agent`, `Cluster Vision Heavy`, etc.) or `NVIDIA NIM *` model and attach `cluster-hw-llm` tools/resources.
 
 ### 3. Continue (VS Code — PC `torre` & Laptop `portatil`)
 `scripts/install_continue.py` (also called automatically by `setup_clients.py`) backs up any existing `config.yaml` and installs a node-tailored `schema: v1` config to **both Windows** (`%USERPROFILE%\.continue\config.yaml`) **and WSL** (`~/.continue/config.yaml`) with `tool_use` / `image_input` capabilities, tuned `contextLength`, cluster rules, and the `cluster-hw-llm` MCP server:
@@ -85,7 +104,8 @@ opencode run --model cluster/code "Explain this module"
 - **Chat / Edit / Apply:** `cluster/code`, `cluster/code-fast`, `cluster/code-heavy`, `cluster/agent-heavy`, `cluster/fast-agent`, `cluster/vision`, `cluster/vision-heavy`, `cluster/reasoning`, `cluster/math`
 - **Tab Autocomplete:** `cluster/autocomplete`
 - **Embeddings (`@codebase`):** `cluster/embed`
-- **MCP:** `cluster-hw-llm` (9 tools, 3 resources)
+- **NVIDIA NIM cloud models** (when the NVIDIA NIM key is present, see the Cloud Alias Table above): `nim/ultra`, `nim/fast`, `nim/vision`, `nim/reasoning`, `nim/code`, `nim/mistral-large`, `nim/kimi`, `nim/step`, `nim/glm-flash`, `nim/minimax-flash`, `nim/gemma-31b`, `nim/embed`
+- **MCP:** `cluster-hw-llm` (15 tools, 3 resources)
 
 ### 4. Cline / Roo Code / Kilo Code / Twinny (VS Code Extensions)
 `install.sh` / `install.ps1` (`--targets vscode`) automatically registers `cluster-hw-llm` across installed extensions on both Windows and WSL (`torre` and `portatil`):
@@ -102,11 +122,12 @@ python3 tools/gateway/cluster_chat.py --model cluster/code --mcp browse --statef
 ### 6. CLI Agents & SDKs (Opt-In Helpers)
 Load helpers once in your shell (`source ~/.config/cluster-llm/env.sh`) or PowerShell (`. $HOME\.config\cluster-llm\env.ps1`):
 - **Claude Code (`/v1/messages`):** `cluster-claude`
-- **Codex CLI (`/v1/responses`):** `python3 scripts/setup_clients.py --clients codex` then `cluster-codex`
+- **Codex CLI (`/v1/responses`):** `python3 scripts/setup_clients.py --clients codex` then `cluster-codex` (with the NVIDIA NIM key present, a `[model_providers.nvidia]` block is also added: `NVIDIA_API_KEY="$(cat ~/.config/nvidia_api_key)" codex -c model_provider="nvidia"`)
 - **Aider:** `cluster-aider`
 - **Antigravity SDK local agent:** `cluster-agy "Inspect src/ and summarize"` (requires `pip install google-antigravity`)
 - **Python / Node OpenAI SDK:** run `use-cluster-openai`, then `OpenAI(base_url="http://127.0.0.1:1235/v1", api_key="local-cluster")`
 - **Python Anthropic SDK:** `Anthropic(base_url="http://127.0.0.1:1235", api_key="local-cluster")`
+- **NVIDIA NIM cloud helpers** (require the key at `~/.config/nvidia_api_key` or `NVIDIA_API_KEY`): `use-nvidia-nim` (exports `OPENAI_BASE_URL=https://integrate.api.nvidia.com/v1` + `OPENAI_API_KEY`), `nim-chat` (`cluster-chat --model nim/ultra`), `nim-orchestrate` (`cluster-chat --orchestrate --model nim/ultra`), `nim-aider` (`aider --model openai/nim/ultra`)
 
 ---
 
@@ -116,15 +137,17 @@ Antigravity's native UI model dropdown only lists Google-managed cloud models (G
 
 To use your local `torre` + `portatil` `cluster/*` pool with Antigravity on either machine:
 
-1. **Bundled Plugin Agents in Antigravity's Agents Menu (`cluster-coder`, `cluster-fast-agent`, `cluster-reasoning`, `cluster-vision`):**
+1. **Bundled Plugin Agents in Antigravity's Agents Menu (`cluster-coder`, `cluster-fast-agent`, `cluster-reasoning`, `cluster-vision`, `cluster-orchestrator`):**
    - Packaged under `plugins/cluster-hw-llm-optimization/agents/` and deployed globally to `~/.gemini/config/plugins/cluster-hw-llm-optimization` (both Windows and WSL).
-   - Each agent routes strictly through virtual `cluster/*` aliases via `cluster_chat` (with `tools/gateway/cluster_chat.py` CLI fallback), so they work identically on `torre` and `portatil` (dual-GPU over LM Link at home, or automatic local Arc 140V failover when away).
+   - `cluster-coder`/`cluster-fast-agent`/`cluster-reasoning`/`cluster-vision` route strictly through virtual `cluster/*` aliases via `cluster_chat` (with `tools/gateway/cluster_chat.py` CLI fallback) — or through zero-VRAM cloud `nim/*` aliases — so they work identically on `torre` and `portatil` (dual-GPU over LM Link at home, or automatic local Arc 140V failover when away).
+   - `cluster-orchestrator` is the multi-node/hybrid cloud+local delegation agent: it calls `cluster_orchestrate` (NVIDIA NIM `nim/ultra`/`nim/fast`) which autonomously drives `peer_status`, `peer_exec`, `peer_send_order`, `cluster_models`, `cluster_chat`, and more across the mesh.
    - See [AGENT_COLLABORATION.md](AGENT_COLLABORATION.md) for the full architecture and collaboration guide.
    - Sync both Windows and WSL plugins anytime on either machine with:
      - WSL / Linux: `bash install.sh --os auto --targets agy --scope user`
      - Windows PowerShell: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Os auto -Targets agy -Scope user`
 2. **Inside Antigravity App / IDE / CLI via MCP (`cluster-hw-llm`):**
-   - `cluster_models` & `cluster_chat`: Inspect live `cluster/*` routes and delegate coding, reasoning, or multimodal prompts to your local pool with stateful `previous_response_id` chaining.
+   - `cluster_models` & `cluster_chat`: Inspect live `cluster/*` and `nim/*` routes and delegate coding, reasoning, or multimodal prompts to your local pool or NVIDIA NIM cloud models with stateful `previous_response_id` chaining.
+   - `cluster_orchestrate`: Let `nim/ultra`/`nim/fast` autonomously execute multi-step cluster-horizontal goals (peer status, exec, orders, LLM status, hardware profiles) across all nodes and return a `tool_trace`.
    - `peer_status`, `peer_send_order`, `peer_order_status`, `peer_exec`, & `openclaw_control`: Send autonomous orders bidirectionally between `torre` and `portatil` across WSL/Windows and control OpenClaw + Telegram HA leadership — see [PEER_AND_OPENCLAW.md](PEER_AND_OPENCLAW.md).
 3. **Full Local Agent via the Official Antigravity Python SDK (`google-antigravity`):**
    - Antigravity's Python SDK natively supports external OpenAI-compatible servers via `LocalOpenAIAgentConfig`.
