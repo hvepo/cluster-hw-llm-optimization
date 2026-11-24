@@ -168,6 +168,30 @@ def setup_opencode(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
                 },
             }
         inst.write_json_atomic(oc_cfg, data, dry_run=dry_run)
+    _reload_opencode(ctx, os_tag, dry_run=dry_run)
+
+
+def _reload_opencode(ctx, os_tag, dry_run=False):
+    """Best-effort reload of any running OpenCode server after config changes."""
+    if dry_run or os.environ.get("CLUSTER_INSTALL_POSIX_HOME") or os.environ.get("CLUSTER_INSTALL_WIN_HOME"):
+        return
+    try:
+        if os_tag == "windows":
+            oc_cmd = os.path.join(ctx["home_local"], "bin", "opencode.cmd")
+            if not os.path.isfile(oc_cmd):
+                return
+            win_cmd = cluster_lib.normalize_local_path(oc_cmd, "windows")
+            cmd_bin = cluster_lib.resolve_host_binary("cmd.exe")
+            subprocess.run([cmd_bin, "/c", win_cmd, "reload"], stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
+        else:
+            oc_bin = os.path.join(ctx["home_local"], ".opencode", "bin", "opencode")
+            if not (os.path.isfile(oc_bin) and os.access(oc_bin, os.X_OK)):
+                oc_bin = shutil.which("opencode") or ""
+            if not oc_bin:
+                return
+            subprocess.run([oc_bin, "reload"], stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
+    except Exception:
+        pass
 
 
 def _vscode_chat_lm_paths(ctx, os_tag):
