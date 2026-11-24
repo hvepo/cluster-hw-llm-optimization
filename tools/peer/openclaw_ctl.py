@@ -446,10 +446,31 @@ def configure_openclaw(cfg=None, config_path=None):
                 "contextWindow": 131072,
                 "maxTokens": 8192,
             },
+            {
+                "id": "gemini/orchestrator",
+                "name": "Gemini Pro Orchestrator (Autonomous Cloud)",
+                "api": "openai-completions",
+                "contextWindow": 1000000,
+                "maxTokens": 65536,
+            },
+            {
+                "id": "gemini/pro",
+                "name": "Gemini Pro (Flagship Cloud Architect)",
+                "api": "openai-completions",
+                "contextWindow": 1000000,
+                "maxTokens": 65536,
+            },
+            {
+                "id": "gemini/flash",
+                "name": "Gemini Flash (Fast Cloud Assistant)",
+                "api": "openai-completions",
+                "contextWindow": 1000000,
+                "maxTokens": 65536,
+            },
         ],
     }
 
-    # Remove duplicate standalone nvidia-nim provider; all 10 curated local+NIM models route cleanly through :1235
+    # Remove duplicate standalone nvidia-nim provider; all 13 curated local+NIM+Gemini models route cleanly through :1235
     providers.pop("nvidia-nim", None)
 
     agents_sec = data.setdefault("agents", {})
@@ -459,6 +480,7 @@ def configure_openclaw(cfg=None, config_path=None):
     prev_model = defaults.get("model") or {}
     prev_fbs = [f for f in (prev_model.get("fallbacks") or []) if not str(f).startswith(("cluster-local/", "nvidia-nim/"))]
     fallbacks = [
+        "cluster-local/gemini/orchestrator",
         "cluster-local/nim/ultra",
         "cluster-local/nim/fast",
         "cluster-local/cluster/code",

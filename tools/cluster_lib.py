@@ -404,6 +404,60 @@ def resolve_nvidia_api_key(cfg=None, home_override=None):
     return ""
 
 
+_WIN_WSL_AGY_PROBE = None
+
+
+def resolve_agy_cli_cmd(cfg=None):
+    """Return argv prefix to invoke an authenticated Antigravity CLI (`agy`) across Linux/WSL/Windows.
+
+    Honors `CLUSTER_AGY_BIN` first (used for overrides & mocked tests). On Windows, prefers
+    bridging via `wsl.exe` to WSL `~/.gemini/bin/agy` where Gemini Pro OAuth + MCP are logged in.
+    """
+    global _WIN_WSL_AGY_PROBE
+    env_bin = (os.environ.get("CLUSTER_AGY_BIN") or "").strip()
+    if env_bin:
+        return [env_bin]
+
+    plat = detect_platform()
+    if plat != "windows":
+        cand = os.path.join(os.path.expanduser("~"), ".gemini", "bin", "agy")
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return [cand]
+        which_agy = shutil.which("agy")
+        if which_agy:
+            return [which_agy]
+        return None
+
+    wsl_bin = resolve_host_binary("wsl.exe")
+    if wsl_bin and os.path.isfile(wsl_bin):
+        if _WIN_WSL_AGY_PROBE is None:
+            try:
+                r = subprocess.run(
+                    [wsl_bin, "-e", "/bin/sh", "-c", 'test -x "$HOME/.gemini/bin/agy"'],
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    timeout=5,
+                )
+                _WIN_WSL_AGY_PROBE = (r.returncode == 0)
+            except Exception:
+                _WIN_WSL_AGY_PROBE = False
+        if _WIN_WSL_AGY_PROBE:
+            return [wsl_bin, "-e", "/bin/sh", "-c", 'cd "$HOME" && exec "$HOME/.gemini/bin/agy" "$@"', "--"]
+
+    win_cand = os.path.join(os.path.expanduser("~"), ".gemini", "bin", "agy.exe")
+    if os.path.isfile(win_cand):
+        return [win_cand]
+    which_win = shutil.which("agy.exe")
+    if which_win:
+        return [which_win]
+    return None
+
+
+def is_gemini_pro_configured(cfg=None):
+    """Return True when an Antigravity CLI runtime is available for `gemini/*` cloud models."""
+    return bool(resolve_agy_cli_cmd(cfg=cfg))
+
+
 def write_nvidia_api_key(api_key, home_override=None):
     """Atomically store NVIDIA NIM API key in ~/.config/nvidia_api_key (0600) and mirror to Windows host on WSL."""
     key = str(api_key or "").strip()

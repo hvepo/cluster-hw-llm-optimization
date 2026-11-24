@@ -16,6 +16,7 @@ Return contract (mirrors the `cluster_orchestrate` MCP tool):
 import http.client
 import json
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -110,7 +111,7 @@ ORCHESTRATOR_TOOLS = [
         "type": "function",
         "function": {
             "name": "cluster_models",
-            "description": "List unified cluster/* (local) and nim/* (NVIDIA NIM cloud) aliases on the Cluster Router Gateway (:1235), their live resolved model & node (torre vs portatil), context length, loaded status, and active failover/anti-thrash routing.",
+            "description": "List unified cluster/* (local), nim/* (NVIDIA NIM cloud), and gemini/* (Gemini Pro subscription) aliases on the Cluster Router Gateway (:1235), their live resolved model & node, context length, loaded status, and active failover/anti-thrash routing.",
             "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         },
     },
@@ -118,12 +119,12 @@ ORCHESTRATOR_TOOLS = [
         "type": "function",
         "function": {
             "name": "cluster_chat",
-            "description": "Delegate a prompt or follow-up turn to a local cluster/* model alias or a cloud nim/* alias (e.g. cluster/code, nim/ultra, nim/fast) via the Cluster Router Gateway /api/v1/chat endpoint. nim/* requires the NVIDIA NIM API key; store=true and previous_response_id work for both.",
+            "description": "Delegate a prompt or follow-up turn to a local cluster/* model alias, nim/* cloud alias, or gemini/* subscription alias (e.g. cluster/code, nim/ultra, nim/fast, gemini/pro, gemini/flash) via the Cluster Router Gateway /api/v1/chat endpoint.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "prompt": {"type": "string", "description": "User prompt to send to the selected model."},
-                    "model": {"type": "string", "default": "cluster/code", "description": "Virtual alias (cluster/* or nim/*) or concrete t-*/p-*/nvidia/id (default: cluster/code)."},
+                    "model": {"type": "string", "default": "cluster/code", "description": "Virtual alias (cluster/*, nim/*, or gemini/*) or concrete model id (default: cluster/code)."},
                     "system_prompt": {"type": "string", "description": "Optional system instruction."},
                     "reasoning": {"type": "string", "enum": ["off", "low", "medium", "high", "on"], "description": "Optional reasoning mode override."},
                     "previous_response_id": {"type": "string", "description": "Optional response_id from a prior turn to continue stateful chat."},
@@ -274,13 +275,130 @@ def _resolve_nim_model(model):
     return model
 
 
+GEMINI_FALLBACK_MAP = {
+    "gemini/orchestrator": "gemini-pro-orchestrator-neon",
+    "gemini/pro": "gemini-4-neon-medium",
+    "gemini/flash": "gemini-3.8-flash-medium",
+}
+
+
+def _resolve_gemini_model(model):
+    """Map a `gemini/*` alias to the concrete Antigravity (`agy`) model id."""
+    if model in GEMINI_FALLBACK_MAP:
+        return GEMINI_FALLBACK_MAP[model]
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "gateway"))
+        import cluster_gateway
+
+        spec = cluster_gateway.GEMINI_ALIAS_SPECS.get(model)
+        if spec:
+            return spec["candidates"][0]
+        if model in cluster_gateway.GEMINI_DIRECT_MODEL_IDS:
+            return model
+    except Exception:
+        pass
+    if str(model).startswith("gemini/"):
+        return str(model).split("/", 1)[1]
+    return model
+
+
+def _is_gemini_orchestrator_model(model):
+    m = str(model or "")
+    return m.startswith("gemini/") or m in GEMINI_FALLBACK_MAP.values()
+
+
+def _run_gemini_orchestrator(prompt, alias, timeout_s=ORCH_CALL_TIMEOUT_S):
+    """Execute a goal autonomously via the OAuth-authenticated Antigravity CLI (`agy -p`)."""
+    agy_model = _resolve_gemini_model(alias)
+    result = {
+        "ok": False,
+        "orchestrator_model": alias,
+        "resolved_model": agy_model,
+        "steps_executed": 0,
+        "tool_trace": [],
+        "text": "",
+    }
+    agy_cmd = cluster_lib.resolve_agy_cli_cmd()
+    if not agy_cmd:
+        result["error"] = "Gemini Pro (agy CLI) not configured or unavailable on this host."
+        return result
+
+    timeout_s = max(30, min(600, int(timeout_s or ORCH_CALL_TIMEOUT_S)))
+    argv = list(agy_cmd) + [
+        "-p",
+        str(prompt or ""),
+        "--model",
+        agy_model,
+        "--mode",
+        "auto",
+        "--dangerously-skip-permissions",
+        "--disable-slash-commands",
+        "--output-format",
+        "json",
+        "--print-timeout",
+        f"{timeout_s}s",
+    ]
+    work_cwd = None if os.name == "nt" else os.path.expanduser("~")
+    try:
+        r = subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            cwd=work_cwd,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout_s + 15,
+        )
+    except Exception as exc:
+        result["error"] = f"Gemini Pro orchestrator invocation failed: {exc}"
+        return result
+
+    obj = {}
+    for line in reversed((r.stdout or "").splitlines()):
+        s = line.strip()
+        if s.startswith("{"):
+            try:
+                obj = json.loads(s)
+                break
+            except Exception:
+                continue
+
+    conv_id = str(obj.get("conversation_id") or "")
+    status = str(obj.get("status") or ("SUCCESS" if r.returncode == 0 else "ERROR"))
+    num_turns = int(obj.get("num_turns") or 1)
+    resp_text = str(obj.get("response") or "").strip()
+
+    if r.returncode != 0 or status != "SUCCESS":
+        err_msg = obj.get("error") or (r.stderr or r.stdout or f"agy exited {r.returncode}").strip()
+        result.update({
+            "ok": False,
+            "steps_executed": num_turns,
+            "conversation_id": conv_id,
+            "tool_trace": [{"step": 1, "tool": "agy_native_runtime", "args": {"model": agy_model}, "result": f"status={status} error={err_msg[:300]}"}],
+            "error": err_msg,
+        })
+        return result
+
+    result.update({
+        "ok": True,
+        "steps_executed": num_turns,
+        "conversation_id": conv_id,
+        "tool_trace": [{"step": 1, "tool": "agy_native_runtime", "args": {"model": agy_model}, "result": f"conversation_id={conv_id} status={status}"}],
+        "text": resp_text,
+    })
+    return result
+
+
 def run_orchestrator(prompt, model=ORCH_DEFAULT_MODEL, max_steps=ORCH_DEFAULT_MAX_STEPS,
                      tool_executor=None, timeout_s=ORCH_CALL_TIMEOUT_S):
-    """Run the NIM multi-turn tool-calling loop.
+    """Run the NIM multi-turn tool-calling loop or Gemini Pro autonomous `agy` runtime.
 
     `tool_executor(name, args)` must return a JSON-serializable dict (or raise).
     """
     alias = str(model or ORCH_DEFAULT_MODEL)
+    if _is_gemini_orchestrator_model(alias):
+        return _run_gemini_orchestrator(prompt, alias, timeout_s=timeout_s)
     try:
         max_steps = int(max_steps)
     except (TypeError, ValueError):

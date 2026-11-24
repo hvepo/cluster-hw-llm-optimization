@@ -46,6 +46,13 @@ NIM_CLIENT_MODELS = [
 ]
 NIM_CHAT_MODELS = list(NIM_CLIENT_MODELS)
 
+# Gemini Pro subscription resources via Cluster Router Gateway (:1235 -> OAuth agy bridge, $0 extra API cost).
+GEMINI_CLIENT_MODELS = [
+    {"id": "gemini/orchestrator", "name": "Gemini Pro Orchestrator (Autonomous Cloud)", "ctx": 1000000, "out": 65536, "tools": True, "vision": False},
+    {"id": "gemini/pro", "name": "Gemini Pro (Flagship Cloud Architect)", "ctx": 1000000, "out": 65536, "tools": True, "vision": False},
+    {"id": "gemini/flash", "name": "Gemini Flash (Fast Cloud Assistant)", "ctx": 1000000, "out": 65536, "tools": True, "vision": False},
+]
+
 # Built-in / auto-discovered / legacy OpenCode providers hidden so OpenCode presents pure Cluster Mode.
 DENIED_OPENCODE_PROVIDERS = ("lmstudio", "ollama", "opencode", "nvidia", "nvidia-nim", "sglang")
 LEGACY_OPENCODE_PROVIDER_KEYS = ("nvidia", "nvidia-nim", "lmstudio", "sglang", "ollama")
@@ -132,7 +139,7 @@ def setup_opencode(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
                 inst.write_json_atomic(oc_cfg, data, dry_run=dry_run)
             continue
 
-        print(f"[{os_tag}:opencode] enforce unified 10-model Cluster Mode (hide raw/free providers) -> {oc_cfg} ({v1_url})")
+        print(f"[{os_tag}:opencode] enforce unified 13-model Cluster Mode (hide raw/free providers) -> {oc_cfg} ({v1_url})")
         data = inst.load_json_safe(oc_cfg, {})
 
         # Clean up pre-existing legacy v2 `providers` & duplicate `provider` entries on PC/Laptop.
@@ -175,9 +182,14 @@ def setup_opencode(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             for m in NIM_CHAT_MODELS:
                 models_map[m["id"]] = _oc_entry(m)
 
+        has_gemini = cluster_lib.is_gemini_pro_configured()
+        if has_gemini:
+            for m in GEMINI_CLIENT_MODELS:
+                models_map[m["id"]] = _oc_entry(m)
+
         data["provider"]["cluster"] = {
             "npm": "@ai-sdk/openai-compatible",
-            "name": "Cluster (Local + NIM)",
+            "name": "Cluster (Local + NIM + Gemini Pro)",
             "options": {
                 "baseURL": v1_url,
                 "apiKey": "local-cluster",
@@ -273,7 +285,7 @@ def setup_vscode_byok(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             if not isinstance(item, dict):
                 continue
             item_name = item.get("name")
-            if item_name in (provider_name, "NVIDIA NIM Cloud", "Cluster (Local + NIM)"):
+            if item_name in (provider_name, "NVIDIA NIM Cloud", "Cluster (Local + NIM)", "Cluster (Local + NIM + Gemini Pro)"):
                 continue
             ms = item.get("models") or []
             if item_name in ("lmstudio", "NVIDIA NIM", "OpenRouter"):
@@ -282,7 +294,8 @@ def setup_vscode_byok(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             cleaned.append(item)
 
         nim_key = cluster_lib.resolve_nvidia_api_key()
-        byok_models = CLIENT_MODELS + (NIM_CHAT_MODELS if nim_key else [])
+        has_gemini = cluster_lib.is_gemini_pro_configured()
+        byok_models = CLIENT_MODELS + (NIM_CHAT_MODELS if nim_key else []) + (GEMINI_CLIENT_MODELS if has_gemini else [])
         cluster_entry = {
             "name": provider_name,
             "vendor": "customendpoint",
@@ -397,6 +410,8 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             "}\n"
             "function nim-chat { cluster-chat --model nim/ultra @args }\n"
             "function nim-orchestrate { cluster-chat --orchestrate --model nim/ultra @args }\n"
+            "function gemini-chat { cluster-chat --model gemini/pro @args }\n"
+            "function gemini-orchestrate { cluster-chat --orchestrate --model gemini/orchestrator @args }\n"
             "function nim-aider {\n"
             "  if (-not $env:NVIDIA_API_KEY) { Write-Host 'nim-aider: NVIDIA_API_KEY not set' -ForegroundColor Yellow; return 1 }\n"
             "  $env:OPENAI_API_BASE = 'https://integrate.api.nvidia.com/v1'\n"
@@ -469,6 +484,8 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         "}\n"
         "nim-chat() { cluster-chat --model nim/ultra \"$@\"; }\n"
         "nim-orchestrate() { cluster-chat --orchestrate --model nim/ultra \"$@\"; }\n"
+        "gemini-chat() { cluster-chat --model gemini/pro \"$@\"; }\n"
+        "gemini-orchestrate() { cluster-chat --orchestrate --model gemini/orchestrator \"$@\"; }\n"
         "nim-aider() {\n"
         '  if [ -z "$NVIDIA_API_KEY" ]; then echo "nim-aider: NVIDIA_API_KEY not set" >&2; return 1; fi\n'
         '  OPENAI_API_BASE="https://integrate.api.nvidia.com/v1" OPENAI_API_KEY="$NVIDIA_API_KEY" aider --model "openai/nvidia/nemotron-3-ultra-550b-a55b" "$@"\n'

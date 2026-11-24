@@ -114,6 +114,42 @@ models:
       - chat
     capabilities:
       - tool_use
+  - name: Gemini Pro Orchestrator (Autonomous Cloud)
+    provider: lmstudio
+    model: gemini/orchestrator
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 1000000
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: Gemini Pro (Flagship Cloud Architect)
+    provider: lmstudio
+    model: gemini/pro
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 1000000
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+  - name: Gemini Flash (Fast Cloud Assistant)
+    provider: lmstudio
+    model: gemini/flash
+    apiBase: http://127.0.0.1:1235/v1
+    defaultCompletionOptions:
+      contextLength: 1000000
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
   - name: Cluster Tab Autocomplete
     provider: lmstudio
     model: cluster/autocomplete

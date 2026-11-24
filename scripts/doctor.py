@@ -708,6 +708,68 @@ def check_gateway_and_clients():
             m_proc.stdin.close()
             m_proc.wait(timeout=5)
             assert m_proc.returncode == 0, f"MCP gateway test failed: {m_proc.stderr.read().decode('utf-8', 'replace')}"
+
+        # 4c. Gemini Pro subscription (gemini/*) OAuth agy bridge (JSON, OpenAI SSE stream, /api/v1/chat --conversation chaining)
+        old_agy_env = os.environ.get("CLUSTER_AGY_BIN")
+        with tempfile.TemporaryDirectory() as gem_tmp:
+            agy_log = os.path.join(gem_tmp, "agy_calls.log")
+            mock_agy = os.path.join(gem_tmp, "mock_agy.sh")
+            with open(mock_agy, "w", encoding="utf-8") as gf:
+                gf.write(
+                    "#!/usr/bin/env bash\n"
+                    f"echo \"$*\" >> \"{agy_log}\"\n"
+                    "if [[ \"$*\" == *\"stream-json\"* ]]; then\n"
+                    "  echo '{\"event\":\"init\",\"conversation_id\":\"conv_gem_s1\"}'\n"
+                    "  echo '{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"conv_gem_s1\",\"step_index\":2,\"state\":\"ACTIVE\",\"step_type\":\"agent_response\",\"text_delta\":\"GEM_STREAM_\"}}'\n"
+                    "  echo '{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"conv_gem_s1\",\"step_index\":2,\"state\":\"DONE\",\"step_type\":\"agent_response\",\"text_delta\":\"OK\"}}'\n"
+                    "  echo '{\"event\":\"result\",\"result\":{\"conversation_id\":\"conv_gem_s1\",\"status\":\"SUCCESS\",\"response\":\"GEM_STREAM_OK\",\"num_turns\":1,\"usage\":{\"input_tokens\":10,\"output_tokens\":2,\"total_tokens\":12}}}'\n"
+                    "else\n"
+                    "  echo '{\"conversation_id\":\"conv_gem_123\",\"status\":\"SUCCESS\",\"response\":\"GEMINI_BRIDGE_OK\",\"num_turns\":1,\"usage\":{\"input_tokens\":10,\"output_tokens\":3,\"total_tokens\":13}}'\n"
+                    "fi\n"
+                )
+            os.chmod(mock_agy, 0o755)
+            os.environ["CLUSTER_AGY_BIN"] = mock_agy
+            try:
+                _, _, hg = req_json("GET", "/health")
+                assert "gemini-pro" in hg["online_nodes"], f"Expected gemini-pro in online_nodes: {hg}"
+                _, _, stg = req_json("GET", "/cluster/status")
+                assert stg["gemini_pro_configured"] is True
+                assert stg["aliases"]["gemini/orchestrator"]["online"] is True
+                _, _, oai_gm = req_json("GET", "/v1/models")
+                oai_gids = {m["id"] for m in oai_gm["data"]}
+                assert {"gemini/orchestrator", "gemini/pro", "gemini/flash"}.issubset(oai_gids)
+
+                _, hdr_g1, g1 = req_json("POST", "/v1/chat/completions", {"model": "gemini/pro", "messages": [{"role": "user", "content": "hi"}]})
+                assert hdr_g1["X-Cluster-Resolved-Model"] == "gemini-4-neon-medium"
+                assert hdr_g1["X-Cluster-Node"] == "gemini-pro"
+                assert g1["choices"][0]["message"]["content"] == "GEMINI_BRIDGE_OK"
+
+                rq_gsse = urllib.request.Request(
+                    gw_base + "/v1/chat/completions",
+                    data=json.dumps({"model": "gemini/flash", "stream": True, "messages": [{"role": "user", "content": "hi"}]}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(rq_gsse, timeout=5) as rgs:
+                    assert rgs.headers.get("X-Cluster-Resolved-Model") == "gemini-3.8-flash-medium"
+                    gsse_txt = rgs.read().decode("utf-8")
+                    assert "GEM_STREAM_" in gsse_txt and "\"finish_reason\": \"stop\"" in gsse_txt and "data: [DONE]" in gsse_txt
+
+                _, hdr_gn1, gn1 = req_json("POST", "/api/v1/chat", {"model": "gemini/orchestrator", "input": "turn 1"})
+                assert hdr_gn1["X-Cluster-Resolved-Model"] == "gemini-pro-orchestrator-neon"
+                assert gn1["response_id"] == "resp_agy_conv_gem_123"
+                assert gn1["output"][0]["content"] == "GEMINI_BRIDGE_OK"
+
+                _, _, gn2 = req_json("POST", "/api/v1/chat", {"model": "gemini/orchestrator", "input": "turn 2", "previous_response_id": gn1["response_id"]})
+                assert gn2["response_id"] == "resp_agy_conv_gem_123"
+                logged_agy = open(agy_log, encoding="utf-8").read()
+                assert "--mode auto --dangerously-skip-permissions" in logged_agy
+                assert "--conversation conv_gem_123" in logged_agy
+            finally:
+                if old_agy_env is None:
+                    os.environ.pop("CLUSTER_AGY_BIN", None)
+                else:
+                    os.environ["CLUSTER_AGY_BIN"] = old_agy_env
     finally:
         gw_srv.shutdown()
         gw_srv.server_close()
@@ -751,11 +813,17 @@ def check_gateway_and_clients():
         with open(custom_bin, "w", encoding="utf-8") as f:
             f.write("#!/usr/bin/env sh\necho custom\n")
 
+        mock_agy_cli = os.path.join(tmp, "mock_agy.sh")
+        with open(mock_agy_cli, "w", encoding="utf-8") as f:
+            f.write("#!/usr/bin/env bash\necho '{\"conversation_id\":\"c1\",\"status\":\"SUCCESS\",\"response\":\"OK\"}'\n")
+        os.chmod(mock_agy_cli, 0o755)
+
         env = dict(os.environ)
         env["CLUSTER_INSTALL_POSIX_HOME"] = posix_home
         env["CLUSTER_INSTALL_WIN_HOME"] = win_home
         env["CLUSTER_INSTALL_WIN_APPDATA"] = win_app
         env["NVIDIA_API_KEY"] = "test-dummy-nvidia-key"
+        env["CLUSTER_AGY_BIN"] = mock_agy_cli
 
         r1 = subprocess.run(
             [sys.executable, setup_script, "--os", "windows,wsl", "--clients", "all"],
@@ -769,9 +837,10 @@ def check_gateway_and_clients():
         assert "providers" not in oc_d
         assert oc_d.get("model") == "cluster/code"
         assert oc_d["provider"]["cluster"]["options"]["baseURL"] == "http://127.0.0.1:1235/v1"
-        assert len(oc_d["provider"]["cluster"]["models"]) == 10
+        assert len(oc_d["provider"]["cluster"]["models"]) == 13
         assert oc_d["provider"]["cluster"]["models"]["code"]["id"] == "cluster/code"
         assert oc_d["provider"]["cluster"]["models"]["nim/ultra"]["id"] == "nim/ultra"
+        assert oc_d["provider"]["cluster"]["models"]["gemini/orchestrator"]["id"] == "gemini/orchestrator"
         denied = {p["resource"] for p in oc_d.get("policies") or [] if p.get("action") == "provider.use" and p.get("effect") == "deny"}
         assert {"lmstudio", "ollama", "opencode", "nvidia", "nvidia-nim", "sglang"}.issubset(denied)
 
@@ -780,7 +849,7 @@ def check_gateway_and_clients():
         assert names == ["Google", "Local Cluster (LM Link)"]
         byok_cl = next(x for x in byok if x.get("name") == "Local Cluster (LM Link)")
         byok_ids = [m.get("id") for m in byok_cl.get("models") or []]
-        assert len(byok_ids) == 10 and "cluster/code" in byok_ids and "nim/ultra" in byok_ids
+        assert len(byok_ids) == 13 and "cluster/code" in byok_ids and "nim/ultra" in byok_ids and "gemini/orchestrator" in byok_ids
 
         lms_mcp = json.load(open(os.path.join(win_home, ".lmstudio", "mcp.json"), encoding="utf-8"))
         assert "browse" in lms_mcp["mcpServers"] and "cluster-hw-llm" in lms_mcp["mcpServers"]
@@ -815,7 +884,7 @@ def check_gateway_and_clients():
             os.path.join(posix_home, ".continue", "config.yaml"),
         ):
             ptxt = open(cont_p, encoding="utf-8").read()
-            assert "Portatil" in ptxt and "cluster/code" in ptxt and "nim/ultra" in ptxt and "mcpServers:" in ptxt
+            assert "Portatil" in ptxt and "cluster/code" in ptxt and "nim/ultra" in ptxt and "gemini/orchestrator" in ptxt and "mcpServers:" in ptxt
 
         r2 = subprocess.run(
             [sys.executable, setup_script, "--os", "windows,wsl", "--clients", "all", "--uninstall"],
@@ -891,7 +960,29 @@ def check_gateway_and_clients():
         nim_orchestrator._nim_chat_completion = orig_call
         nim_orchestrator.cluster_lib.resolve_nvidia_api_key = orig_resolve_key
 
-    print("[PASS] 5-protocol Cluster Gateway (failover, anti-thrash, SSE, /api/v1/chat pin) + MCP + client provisioner + NIM orchestrator verified")
+    # 7b. Mocked unit test for Gemini Pro orchestrator via nim_orchestrator.run_orchestrator(model="gemini/orchestrator")
+    with tempfile.TemporaryDirectory() as g_orch_tmp:
+        mock_g_orch = os.path.join(g_orch_tmp, "mock_agy_orch.sh")
+        with open(mock_g_orch, "w", encoding="utf-8") as gf:
+            gf.write("#!/usr/bin/env bash\necho '{\"conversation_id\":\"conv_gem_orch_1\",\"status\":\"SUCCESS\",\"response\":\"GEMINI_ORCH_OK\",\"num_turns\":2}'\n")
+        os.chmod(mock_g_orch, 0o755)
+        old_agy_bin = os.environ.get("CLUSTER_AGY_BIN")
+        os.environ["CLUSTER_AGY_BIN"] = mock_g_orch
+        try:
+            g_res = nim_orchestrator.run_orchestrator("check cluster", model="gemini/orchestrator", max_steps=4)
+            assert g_res["ok"] is True
+            assert g_res["orchestrator_model"] == "gemini/orchestrator"
+            assert g_res["resolved_model"] == "gemini-pro-orchestrator-neon"
+            assert g_res["conversation_id"] == "conv_gem_orch_1"
+            assert g_res["steps_executed"] == 2
+            assert g_res["text"] == "GEMINI_ORCH_OK"
+        finally:
+            if old_agy_bin is None:
+                os.environ.pop("CLUSTER_AGY_BIN", None)
+            else:
+                os.environ["CLUSTER_AGY_BIN"] = old_agy_bin
+
+    print("[PASS] 5-protocol Cluster Gateway (failover, anti-thrash, SSE, Gemini Pro bridge, pin) + MCP + client provisioner + NIM/Gemini orchestrator verified")
 
 
 def check_peer_and_openclaw():

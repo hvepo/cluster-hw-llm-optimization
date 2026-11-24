@@ -86,6 +86,24 @@ CONTINUE_MODEL_SPECS = {
         "roles": ["chat"],
         "capabilities": ["tool_use"],
     },
+    "gemini/orchestrator": {
+        "name": "Gemini Pro Orchestrator (Autonomous Cloud)",
+        "ctx": 1000000,
+        "roles": ["chat", "edit", "apply"],
+        "capabilities": ["tool_use"],
+    },
+    "gemini/pro": {
+        "name": "Gemini Pro (Flagship Cloud Architect)",
+        "ctx": 1000000,
+        "roles": ["chat", "edit", "apply"],
+        "capabilities": ["tool_use"],
+    },
+    "gemini/flash": {
+        "name": "Gemini Flash (Fast Cloud Assistant)",
+        "ctx": 1000000,
+        "roles": ["chat", "edit", "apply"],
+        "capabilities": ["tool_use"],
+    },
     "cluster/autocomplete": {
         "name": "Cluster Tab Autocomplete",
         "ctx": 4096,
@@ -111,6 +129,9 @@ CURATED_ORDER = [
     "nim/code",
     "nim/vision",
     "nim/reasoning",
+    "gemini/orchestrator",
+    "gemini/pro",
+    "gemini/flash",
     "cluster/autocomplete",
     "cluster/embed",
 ]

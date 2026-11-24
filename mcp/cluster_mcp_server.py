@@ -111,17 +111,17 @@ TOOLS = [
     },
     {
         "name": "cluster_models",
-        "description": "List unified cluster/* (local) and nim/* (NVIDIA NIM cloud) aliases on the Cluster Router Gateway (:1235), their live resolved model & node (torre vs portatil), context length, loaded status, and active failover/anti-thrash routing.",
+        "description": "List unified cluster/* (local), nim/* (NVIDIA NIM cloud), and gemini/* (Gemini Pro subscription) aliases on the Cluster Router Gateway (:1235), their live resolved model & node, context length, loaded status, and active failover/anti-thrash routing.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
         "name": "cluster_chat",
-        "description": "Delegate a prompt or follow-up turn to a local cluster/* model alias or a cloud nim/* alias (e.g. cluster/code, cluster/fast-agent, cluster/reasoning, cluster/vision-heavy, nim/ultra, nim/fast) via the Cluster Router Gateway /api/v1/chat endpoint. nim/* requires the NVIDIA NIM API key; store=true and previous_response_id work for both.",
+        "description": "Delegate a prompt or follow-up turn to a local cluster/* alias, NVIDIA NIM nim/* alias, or Gemini Pro subscription gemini/* alias (e.g. cluster/code, nim/ultra, nim/fast, gemini/pro, gemini/flash, gemini/orchestrator) via the Cluster Router Gateway /api/v1/chat endpoint.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "prompt": {"type": "string", "description": "User prompt to send to the selected cluster model."},
-                "model": {"type": "string", "default": "cluster/code", "description": "Virtual alias (cluster/* or nim/*) or concrete t-*/p-*/nvidia/id (default: cluster/code). nim/* requires the NVIDIA NIM API key."},
+                "model": {"type": "string", "default": "cluster/code", "description": "Virtual alias (cluster/*, nim/*, or gemini/*) or concrete model id (default: cluster/code)."},
                 "system_prompt": {"type": "string", "description": "Optional system instruction."},
                 "reasoning": {"type": "string", "enum": ["off", "low", "medium", "high", "on"], "description": "Optional reasoning mode override."},
                 "previous_response_id": {"type": "string", "description": "Optional response_id from a prior turn to continue stateful chat pinned to the same node."},
@@ -139,13 +139,13 @@ TOOLS = [
     },
     {
         "name": "cluster_orchestrate",
-        "description": "Autonomous multi-step tool-calling orchestrator (NVIDIA NIM cloud, zero local VRAM) that plans and executes cluster-horizontal goals across all cluster/* local and nim/* cloud models on torre, portatil, raspberrypi, and arduq: peer_status, peer_exec, peer_send_order, peer_order_status, cluster_models, cluster_chat, hw_node_profile, node_llm_status, node_best_configs, openclaw_control. Returns the orchestrator's final text plus a step-by-step tool_trace.",
+        "description": "Autonomous multi-step cloud orchestrator (zero local VRAM) supporting both Gemini Pro subscription (`gemini/orchestrator`, full native Antigravity tools + web search + cluster MCP) and NVIDIA NIM (`nim/ultra`, `nim/fast`) across torre, portatil, raspberrypi, and arduq. Returns the orchestrator's final text plus step-by-step tool_trace.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "prompt": {"type": "string", "description": "Goal the orchestrator plans and executes with the available tools."},
-                "model": {"type": "string", "default": "nim/ultra", "description": "NVIDIA NIM orchestrator model (e.g. 'nim/ultra', 'nim/fast'). The orchestrator may also delegate a sub-task to a local cluster/* alias."},
-                "max_steps": {"type": "integer", "minimum": 1, "maximum": 12, "default": 6, "description": "Max tool executions before the orchestrator summarizes."},
+                "model": {"type": "string", "default": "nim/ultra", "description": "Cloud orchestrator model ('gemini/orchestrator', 'nim/ultra', 'nim/fast', 'gemini/pro', 'gemini/flash')."},
+                "max_steps": {"type": "integer", "minimum": 1, "maximum": 12, "default": 6, "description": "Max tool executions before the orchestrator summarizes (for NIM loop)."},
             },
             "required": ["prompt"],
             "additionalProperties": False,

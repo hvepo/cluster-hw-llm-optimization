@@ -130,14 +130,14 @@ def _run_orchestrate_turn(ap, args):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Native LM Studio /api/v1/chat client via Cluster Router Gateway")
     ap.add_argument("prompt", nargs="?", help="User prompt (optional when --stateful interactive loop is used)")
-    ap.add_argument("--model", default=None, help="Model or cluster*/nim* alias (default: cluster/code; nim/ultra when --orchestrate is passed)")
+    ap.add_argument("--model", default=None, help="Model or cluster*/nim*/gemini* alias (default: cluster/code; nim/ultra or gemini/orchestrator with --orchestrate)")
     ap.add_argument("--gateway", default="http://127.0.0.1:1235", help="Gateway base URL")
     ap.add_argument("--system", dest="system_prompt", help="Optional system prompt")
     ap.add_argument("--mcp", action="append", default=[], help="MCP server name (e.g. browse, cluster-hw-llm) or mcp/<name>")
     ap.add_argument("--reasoning", choices=("off", "low", "medium", "high", "on"), help="Reasoning mode")
     ap.add_argument("--previous-response-id", help="Resume stateful conversation from response_id")
     ap.add_argument("--stateful", action="store_true", help="Keep interactive stateful chat loop chaining previous_response_id")
-    ap.add_argument("--orchestrate", action="store_true", help="Run as an autonomous multi-turn tool-calling orchestrator via NVIDIA NIM")
+    ap.add_argument("--orchestrate", action="store_true", help="Run as an autonomous cloud orchestrator (via nim/ultra, nim/fast, or gemini/orchestrator)")
     ap.add_argument("--max-steps", type=int, default=nim_orchestrator.ORCH_DEFAULT_MAX_STEPS, help="Max tool executions in --orchestrate mode (default: 6)")
     args = ap.parse_args(argv)
 

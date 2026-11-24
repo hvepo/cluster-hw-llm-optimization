@@ -51,7 +51,7 @@ Full methodology and per-model tables in [docs/BENCHMARKS.md](docs/BENCHMARKS.md
 | Component | Path | Purpose |
 |---|---|---|
 | **Skills (3)** | `skills/{hw-node-profiler,llm-node-finetune,cluster-install-migrate}` | Phase 1 hardware/BIOS/driver profiling, Phase 2 per-node LLM fine-tuning, and cross-OS migration |
-| **5-Protocol Cluster Gateway & SDK Helper** | `tools/gateway/{cluster_gateway.py,gateway_ctl.py,cluster_chat.py,agy_local_agent.py}` | Exposes the unified LM Link pool (`127.0.0.1:1235`) across LM Studio `/api/v1/*`, OpenAI `/v1/*`, Responses, and Anthropic `/v1/messages` with `cluster/*` failover, anti-thrash routing, NVIDIA NIM `nim/*` cloud proxying + native-chat bridge, and the Antigravity SDK runner |
+| **5-Protocol Cluster Gateway & SDK Helper** | `tools/gateway/{cluster_gateway.py,gateway_ctl.py,cluster_chat.py,agy_local_agent.py}` | Exposes the unified LM Link pool (`127.0.0.1:1235`) across LM Studio `/api/v1/*`, OpenAI `/v1/*`, Responses, and Anthropic `/v1/messages` with `cluster/*` failover, anti-thrash routing, NVIDIA NIM `nim/*` cloud proxying, Gemini Pro `gemini/*` (`agy` OAuth) subscription bridge, and the Antigravity SDK runner |
 | **Client Provisioner & Ollama Audit** | `scripts/{setup_clients.py,cleanup_ollama.py}` (`--serving`) | Configures OpenCode, VS Code Copilot BYOK, Continue, LM Studio `mcp.json`, Windows/WSL shell helpers (`cluster-agy`), and detects/removes leftover Windows/WSL `:11434` Ollama daemons |
 | **Stdio MCP Server (15 tools, 6 resources)** | `mcp/cluster_mcp_server.py` (`cluster-hw-llm`) | `hw_node_profile` · `hw_gpu_telemetry` · `hw_event_log_check` · `llm_compute_ceiling` · `node_llm_status` · `node_best_configs` · `node_llm_control` · `cluster_models` · `cluster_chat` · `cluster_orchestrate` · `peer_status` · `peer_send_order` · `peer_order_status` · `peer_exec` · `openclaw_control` |
 | **Bidirectional Peer Bridge & OpenClaw HA** | `tools/peer/{peer_daemon.py,peer_ctl.py,openclaw_ctl.py}` | Tailscale `:1236` + Google Drive offline queue for `torre` ↔ `portatil` orders (`WSL`/`Windows`/Crossed) + WSL OpenClaw Telegram HA leader control |
@@ -83,7 +83,7 @@ python3 scripts/doctor.py --all --check-privacy
 python3 scripts/doctor.py --all --check-privacy --live
 ```
 
-See **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** for the 10-model Cluster Mode cheat sheet, orchestrator roles, and local vs. cloud working modes — plus [docs/PEER_AND_OPENCLAW.md](docs/PEER_AND_OPENCLAW.md), [docs/AGENT_COLLABORATION.md](docs/AGENT_COLLABORATION.md), [docs/CLIENT_SETUP.md](docs/CLIENT_SETUP.md), [docs/MIGRATION.md](docs/MIGRATION.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and [PROMPT.md](PROMPT.md).
+See **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** for the 13-model Cluster Mode cheat sheet, orchestrator roles, and local vs. cloud working modes — plus [docs/PEER_AND_OPENCLAW.md](docs/PEER_AND_OPENCLAW.md), [docs/AGENT_COLLABORATION.md](docs/AGENT_COLLABORATION.md), [docs/CLIENT_SETUP.md](docs/CLIENT_SETUP.md), [docs/MIGRATION.md](docs/MIGRATION.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and [PROMPT.md](PROMPT.md).
 
 ## License
 MIT ([LICENSE](LICENSE)) — retains upstream MIT notice for `sybil-solutions/inference-optimisation-skill`.

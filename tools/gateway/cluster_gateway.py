@@ -262,6 +262,44 @@ NIM_ALIAS_SPECS = {
 
 NIM_DIRECT_MODEL_IDS = {spec["candidates"][0]: alias for alias, spec in NIM_ALIAS_SPECS.items()}
 
+GEMINI_ALIAS_SPECS = {
+    "gemini/orchestrator": {
+        "candidates": ["gemini-pro-orchestrator-neon"],
+        "cloud": "gemini-pro",
+        "context_length": 1000000,
+        "max_output_tokens": 65536,
+        "tools": True,
+        "vision": False,
+        "thinking": True,
+        "orchestrator": True,
+        "description": "Gemini Pro Flagship Autonomous Cloud Orchestrator (Antigravity subscription, 0 VRAM)",
+    },
+    "gemini/pro": {
+        "candidates": ["gemini-4-neon-medium"],
+        "cloud": "gemini-pro",
+        "context_length": 1000000,
+        "max_output_tokens": 65536,
+        "tools": True,
+        "vision": False,
+        "thinking": True,
+        "orchestrator": False,
+        "description": "Gemini Pro Flagship Architect, Code & Deep Reasoning (Antigravity subscription, 0 VRAM)",
+    },
+    "gemini/flash": {
+        "candidates": ["gemini-3.8-flash-medium"],
+        "cloud": "gemini-pro",
+        "context_length": 1000000,
+        "max_output_tokens": 65536,
+        "tools": True,
+        "vision": False,
+        "thinking": False,
+        "orchestrator": False,
+        "description": "Gemini Pro Fast Cloud Assistant & Edits (Antigravity subscription, 0 VRAM)",
+    },
+}
+
+GEMINI_DIRECT_MODEL_IDS = {spec["candidates"][0]: alias for alias, spec in GEMINI_ALIAS_SPECS.items()}
+
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -315,13 +353,18 @@ class ClusterRouter:
     def get_nvidia_api_key(self):
         return cluster_lib.resolve_nvidia_api_key(self.cfg)
 
-    def record_cloud_session(self, response_id, concrete_model, alias, messages):
+    def is_gemini_pro_available(self):
+        return cluster_lib.is_gemini_pro_configured(self.cfg)
+
+    def record_cloud_session(self, response_id, concrete_model, alias, messages, cloud="nvidia-nim", conversation_id=""):
         if not response_id or not concrete_model:
             return
         with self._lock:
             self._cloud_sessions[response_id] = {
                 "model": concrete_model,
                 "alias": alias or "",
+                "cloud": cloud or "nvidia-nim",
+                "conversation_id": conversation_id or "",
                 "messages": list(messages or []),
             }
             self._cloud_sessions.move_to_end(response_id)
@@ -356,6 +399,8 @@ class ClusterRouter:
     def _build_alias_specs(self, overrides):
         specs = {k: dict(v) for k, v in DEFAULT_ALIAS_SPECS.items()}
         for k, v in NIM_ALIAS_SPECS.items():
+            specs[k] = dict(v)
+        for k, v in GEMINI_ALIAS_SPECS.items():
             specs[k] = dict(v)
         for alias, cand_list in overrides.items():
             if isinstance(cand_list, list) and cand_list:
@@ -479,6 +524,11 @@ class ClusterRouter:
                 return int(spec.get("context_length") or 131072)
         if model_key in NIM_ALIAS_SPECS:
             return int(NIM_ALIAS_SPECS[model_key].get("context_length") or 131072)
+        for spec in GEMINI_ALIAS_SPECS.values():
+            if model_key in spec.get("candidates", ()):
+                return int(spec.get("context_length") or 1000000)
+        if model_key in GEMINI_ALIAS_SPECS:
+            return int(GEMINI_ALIAS_SPECS[model_key].get("context_length") or 1000000)
         info = self.tuned_models.get(model_key)
         if info and info.get("context_length"):
             return int(info["context_length"])
@@ -495,6 +545,15 @@ class ClusterRouter:
             return True
         return False
 
+    def is_gemini_model(self, model_key):
+        if not model_key:
+            return False
+        if model_key in GEMINI_ALIAS_SPECS or model_key in GEMINI_DIRECT_MODEL_IDS:
+            return True
+        if model_key.startswith("gemini/"):
+            return True
+        return False
+
     def resolve_model(self, requested_model, previous_response_id=None, state=None):
         if state is None:
             state = self.snapshot_state()
@@ -503,24 +562,29 @@ class ClusterRouter:
             cloud_sess = self.get_cloud_session(previous_response_id)
             if cloud_sess:
                 c_mod = cloud_sess["model"]
-                c_alias = cloud_sess.get("alias") or NIM_DIRECT_MODEL_IDS.get(c_mod, "")
+                cloud_kind = cloud_sess.get("cloud") or "nvidia-nim"
+                c_alias = cloud_sess.get("alias") or (
+                    GEMINI_DIRECT_MODEL_IDS.get(c_mod, "") if cloud_kind == "gemini-pro" else NIM_DIRECT_MODEL_IDS.get(c_mod, "")
+                )
                 return {
                     "alias": c_alias,
                     "resolved": c_mod,
-                    "node": "nvidia-nim",
-                    "cloud": "nvidia-nim",
+                    "node": cloud_kind,
+                    "cloud": cloud_kind,
                     "diverted": False,
                     "pinned": True,
                     "spec": self.alias_specs.get(c_alias),
                 }
             pinned = self.get_pinned_model(previous_response_id)
-            if pinned and (pinned in state["by_key"] or not state["reachable"] or self.is_nim_model(pinned)):
+            if pinned and (pinned in state["by_key"] or not state["reachable"] or self.is_nim_model(pinned) or self.is_gemini_model(pinned)):
                 is_nim = self.is_nim_model(pinned)
+                is_gem = self.is_gemini_model(pinned)
+                cloud_kind = "gemini-pro" if is_gem else ("nvidia-nim" if is_nim else None)
                 return {
                     "alias": requested_model if requested_model in self.alias_specs else "",
                     "resolved": pinned,
-                    "node": "nvidia-nim" if is_nim else (self.node_for_model(pinned) or self.local_node),
-                    "cloud": "nvidia-nim" if is_nim else None,
+                    "node": cloud_kind if cloud_kind else (self.node_for_model(pinned) or self.local_node),
+                    "cloud": cloud_kind,
                     "diverted": False,
                     "pinned": True,
                     "spec": self.alias_specs.get(requested_model),
@@ -533,13 +597,14 @@ class ClusterRouter:
 
         if requested_model in self.alias_specs:
             spec = self.alias_specs[requested_model]
-            if spec.get("cloud") == "nvidia-nim":
+            if spec.get("cloud") in ("nvidia-nim", "gemini-pro"):
+                cloud_kind = spec["cloud"]
                 chosen = spec["candidates"][0]
                 return {
                     "alias": requested_model,
                     "resolved": chosen,
-                    "node": "nvidia-nim",
-                    "cloud": "nvidia-nim",
+                    "node": cloud_kind,
+                    "cloud": cloud_kind,
                     "diverted": False,
                     "pinned": False,
                     "spec": spec,
@@ -575,6 +640,19 @@ class ClusterRouter:
                 "spec": spec,
             }
 
+        if requested_model in GEMINI_DIRECT_MODEL_IDS:
+            alias = GEMINI_DIRECT_MODEL_IDS[requested_model]
+            spec = self.alias_specs.get(alias)
+            return {
+                "alias": alias,
+                "resolved": requested_model,
+                "node": "gemini-pro",
+                "cloud": "gemini-pro",
+                "diverted": False,
+                "pinned": False,
+                "spec": spec,
+            }
+
         if requested_model.startswith("nim/") and requested_model.count("/") >= 2:
             raw_nim = requested_model.split("/", 1)[1]
             return {
@@ -585,6 +663,18 @@ class ClusterRouter:
                 "diverted": False,
                 "pinned": False,
                 "spec": {"cloud": "nvidia-nim", "tools": True, "vision": False, "context_length": 131072},
+            }
+
+        if requested_model.startswith("gemini/") and len(requested_model) > 7:
+            raw_gem = requested_model.split("/", 1)[1]
+            return {
+                "alias": requested_model,
+                "resolved": raw_gem,
+                "node": "gemini-pro",
+                "cloud": "gemini-pro",
+                "diverted": False,
+                "pinned": False,
+                "spec": {"cloud": "gemini-pro", "tools": True, "vision": False, "context_length": 1000000, "max_output_tokens": 65536},
             }
 
         return {
@@ -600,18 +690,23 @@ class ClusterRouter:
     def build_status_payload(self):
         state = self.snapshot_state(force=True)
         has_nim = bool(self.get_nvidia_api_key())
+        has_gemini = self.is_gemini_pro_available()
         aliases = {}
         for alias, spec in self.alias_specs.items():
-            is_nim = spec.get("cloud") == "nvidia-nim"
+            cloud_kind = spec.get("cloud")
+            is_nim = cloud_kind == "nvidia-nim"
+            is_gem = cloud_kind == "gemini-pro"
             res = self.resolve_model(alias, state=state)
             resolved = res["resolved"]
+            online = has_nim if is_nim else (has_gemini if is_gem else (resolved in state["by_key"]))
+            loaded = has_nim if is_nim else (has_gemini if is_gem else (resolved in state["loaded_keys"]))
             aliases[alias] = {
                 "resolved": resolved,
                 "node": res["node"],
-                "cloud": spec.get("cloud"),
+                "cloud": cloud_kind,
                 "orchestrator": bool(spec.get("orchestrator")),
-                "online": has_nim if is_nim else (resolved in state["by_key"]),
-                "loaded": has_nim if is_nim else (resolved in state["loaded_keys"]),
+                "online": online,
+                "loaded": loaded,
                 "context_length": self.tuned_context_for(resolved, state["by_key"].get(resolved)),
                 "anti_thrash_diverted": res["diverted"],
                 "description": spec.get("description", ""),
@@ -621,12 +716,15 @@ class ClusterRouter:
         online_nodes = list(state["online_nodes"])
         if has_nim and "nvidia-nim" not in online_nodes:
             online_nodes.append("nvidia-nim")
+        if has_gemini and "gemini-pro" not in online_nodes:
+            online_nodes.append("gemini-pro")
         return {
             "ok": True,
             "gateway": "cluster-hw-llm",
             "upstream": self.upstream_url,
             "upstream_reachable": state["reachable"],
             "nvidia_nim_configured": has_nim,
+            "gemini_pro_configured": has_gemini,
             "local_node": self.local_node,
             "online_nodes": online_nodes,
             "loaded_by_node": state["loaded_by_node"],
@@ -638,14 +736,17 @@ class ClusterRouter:
     def build_openai_models_payload(self):
         state = self.snapshot_state()
         has_nim = bool(self.get_nvidia_api_key())
+        has_gemini = self.is_gemini_pro_available()
         now_ts = int(time.time())
         items = []
         for alias, spec in self.alias_specs.items():
-            is_nim = spec.get("cloud") == "nvidia-nim"
-            if is_nim and not has_nim:
+            cloud_kind = spec.get("cloud")
+            if cloud_kind == "nvidia-nim" and not has_nim:
+                continue
+            if cloud_kind == "gemini-pro" and not has_gemini:
                 continue
             res = self.resolve_model(alias, state=state)
-            if not is_nim and state["reachable"] and res["resolved"] not in state["by_key"]:
+            if not cloud_kind and state["reachable"] and res["resolved"] not in state["by_key"]:
                 continue
             items.append({
                 "id": alias,
@@ -671,31 +772,37 @@ class ClusterRouter:
     def build_lmstudio_v1_models_payload(self):
         state = self.snapshot_state()
         has_nim = bool(self.get_nvidia_api_key())
+        has_gemini = self.is_gemini_pro_available()
         out = []
         for alias, spec in self.alias_specs.items():
-            is_nim = spec.get("cloud") == "nvidia-nim"
-            if is_nim and not has_nim:
+            cloud_kind = spec.get("cloud")
+            if cloud_kind == "nvidia-nim" and not has_nim:
                 continue
+            if cloud_kind == "gemini-pro" and not has_gemini:
+                continue
+            is_cloud = bool(cloud_kind)
             res = self.resolve_model(alias, state=state)
             resolved = res["resolved"]
             up = state["by_key"].get(resolved)
-            if not is_nim and state["reachable"] and not up:
+            if not is_cloud and state["reachable"] and not up:
                 continue
             ctx = self.tuned_context_for(resolved, up)
             is_emb = bool(spec.get("embedding"))
+            arch = "gemini-pro-subscription" if cloud_kind == "gemini-pro" else ("nvidia-nim-cloud" if cloud_kind == "nvidia-nim" else ((up or {}).get("architecture") or "cluster-alias"))
+            quant = "subscription" if cloud_kind == "gemini-pro" else ("cloud-fp8" if cloud_kind == "nvidia-nim" else (up or {}).get("quantization"))
             entry = {
                 "type": "embedding" if is_emb else "llm",
-                "publisher": "nvidia-nim" if is_nim else "cluster-gateway",
+                "publisher": cloud_kind if is_cloud else "cluster-gateway",
                 "key": alias,
                 "display_name": f"{alias} -> {resolved}",
-                "architecture": "nvidia-nim-cloud" if is_nim else ((up or {}).get("architecture") or "cluster-alias"),
-                "quantization": "cloud-fp8" if is_nim else (up or {}).get("quantization"),
+                "architecture": arch,
+                "quantization": quant,
                 "size_bytes": (up or {}).get("size_bytes") or 0,
                 "max_context_length": ctx,
-                "loaded_instances": [{"id": resolved, "config": {"context_length": ctx}}] if is_nim else ((up or {}).get("loaded_instances") or []),
+                "loaded_instances": [{"id": resolved, "config": {"context_length": ctx}}] if is_cloud else ((up or {}).get("loaded_instances") or []),
                 "resolved_model": resolved,
                 "resolved_node": res["node"],
-                "format": "cloud" if is_nim else "gguf",
+                "format": "cloud" if is_cloud else "gguf",
             }
             if not is_emb:
                 caps = {
@@ -719,21 +826,25 @@ class ClusterRouter:
     def build_lmstudio_v0_models_payload(self):
         state = self.snapshot_state()
         has_nim = bool(self.get_nvidia_api_key())
+        has_gemini = self.is_gemini_pro_available()
         items = []
         for alias, spec in self.alias_specs.items():
-            is_nim = spec.get("cloud") == "nvidia-nim"
-            if is_nim and not has_nim:
+            cloud_kind = spec.get("cloud")
+            if cloud_kind == "nvidia-nim" and not has_nim:
                 continue
+            if cloud_kind == "gemini-pro" and not has_gemini:
+                continue
+            is_cloud = bool(cloud_kind)
             res = self.resolve_model(alias, state=state)
             up = state["by_key"].get(res["resolved"])
-            if not is_nim and state["reachable"] and not up:
+            if not is_cloud and state["reachable"] and not up:
                 continue
             items.append({
                 "id": alias,
                 "object": "model",
                 "type": "embeddings" if spec.get("embedding") else "llm",
-                "publisher": "nvidia-nim" if is_nim else "cluster-gateway",
-                "state": "loaded" if (is_nim or (up and up.get("loaded_instances"))) else "not-loaded",
+                "publisher": cloud_kind if is_cloud else "cluster-gateway",
+                "state": "loaded" if (is_cloud or (up and up.get("loaded_instances"))) else "not-loaded",
                 "max_context_length": self.tuned_context_for(res["resolved"], up),
                 "loaded_context_length": self.tuned_context_for(res["resolved"], up),
             })
@@ -792,6 +903,56 @@ def _extract_response_id_from_obj(obj):
     if isinstance(resp, dict) and isinstance(resp.get("id"), str) and resp["id"]:
         return resp["id"]
     return None
+
+
+def _extract_content_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") in ("text", "input_text", "output_text") and item.get("text"):
+                    parts.append(str(item["text"]))
+                elif item.get("content"):
+                    parts.append(_extract_content_text(item["content"]))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(p for p in parts if p)
+    return str(content) if content is not None else ""
+
+
+def _format_oai_messages_for_agy(messages, system_prompt=None):
+    """Flatten OpenAI-style chat messages into a clean prompt string for `agy -p`."""
+    sys_parts = []
+    if system_prompt:
+        sys_parts.append(str(system_prompt).strip())
+    turns = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            turns.append(("user", str(msg)))
+            continue
+        role = str(msg.get("role") or "user").strip().lower()
+        txt = _extract_content_text(msg.get("content")).strip()
+        if not txt:
+            continue
+        if role in ("system", "developer"):
+            sys_parts.append(txt)
+        else:
+            turns.append((role, txt))
+
+    if len(turns) == 1 and turns[0][0] == "user":
+        if sys_parts:
+            return f"[System Instructions]\n" + "\n\n".join(sys_parts) + f"\n\n{turns[0][1]}"
+        return turns[0][1]
+
+    blocks = []
+    if sys_parts:
+        blocks.append("[System]\n" + "\n\n".join(sys_parts))
+    for role, txt in turns:
+        label = "Assistant" if role == "assistant" else ("Tool" if role == "tool" else "User")
+        blocks.append(f"[{label}]\n{txt}")
+    return "\n\n".join(blocks)
 
 
 def _scan_sse_line_for_pin(line_bytes, router, resolved_model):
@@ -859,6 +1020,11 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path == "/health":
             state = self.router.snapshot_state()
+            online_nodes = list(state["online_nodes"])
+            if self.router.get_nvidia_api_key() and "nvidia-nim" not in online_nodes:
+                online_nodes.append("nvidia-nim")
+            if self.router.is_gemini_pro_available() and "gemini-pro" not in online_nodes:
+                online_nodes.append("gemini-pro")
             self._send_json(
                 200,
                 {
@@ -867,7 +1033,7 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                     "upstream": self.router.upstream_url,
                     "local_node": self.router.local_node,
                     "upstream_reachable": state["reachable"],
-                    "online_nodes": state["online_nodes"],
+                    "online_nodes": online_nodes,
                 },
             )
             return
@@ -1019,6 +1185,9 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
         res = self.router.resolve_model(req_model, previous_response_id=prev_id)
         if res.get("cloud") == "nvidia-nim":
             self._handle_nim_inference(path, body, res, prev_id=prev_id)
+            return
+        if res.get("cloud") == "gemini-pro":
+            self._handle_agy_inference(path, body, res, prev_id=prev_id)
             return
         if prev_id and not res.get("pinned"):
             body.pop("previous_response_id", None)
@@ -1277,6 +1446,377 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
             if conn:
                 try:
                     conn.close()
+                except Exception:
+                    pass
+
+    def _resolve_agy_cwd(self, body):
+        req_cwd = body.get("cwd")
+        if os.name == "nt":
+            # Windows `agy` cmd wraps via `wsl.exe -e /bin/sh -c 'cd "$HOME" && exec ...'`
+            return None
+        if isinstance(req_cwd, str) and req_cwd.strip() and os.path.isdir(req_cwd.strip()):
+            return req_cwd.strip()
+        return os.path.expanduser("~")
+
+    def _write_http_chunk(self, raw_bytes):
+        self.wfile.write(f"{len(raw_bytes):x}\r\n".encode("ascii") + raw_bytes + b"\r\n")
+        self.wfile.flush()
+
+    def _handle_agy_inference(self, path, body, res, prev_id=None):
+        """Bridge `/v1/chat/completions`, `/api/v1/chat`, `/v1/responses`, `/v1/messages` to OAuth `agy -p`."""
+        extra_headers = {
+            "X-Cluster-Alias": res.get("alias") or "",
+            "X-Cluster-Resolved-Model": res["resolved"],
+            "X-Cluster-Node": "gemini-pro",
+        }
+        if path == "/v1/embeddings":
+            self._send_json(400, {"error": {"message": "Gemini Pro models do not support /v1/embeddings; use cluster/embed.", "type": "invalid_request"}}, extra_headers=extra_headers)
+            return
+
+        agy_cmd = cluster_lib.resolve_agy_cli_cmd(self.router.cfg)
+        if not agy_cmd:
+            self._send_json(
+                503,
+                {"error": {"message": "Gemini Pro (agy CLI) is not available or authenticated on this host.", "type": "service_unavailable"}},
+                extra_headers=extra_headers,
+            )
+            return
+
+        conv_id = ""
+        prior_sess = self.router.get_cloud_session(prev_id) if prev_id else None
+        if prior_sess and prior_sess.get("cloud") == "gemini-pro" and prior_sess.get("conversation_id"):
+            conv_id = prior_sess["conversation_id"]
+
+        if path == "/api/v1/chat":
+            inp = body.get("input")
+            prompt_text = _format_oai_messages_for_agy(
+                inp if isinstance(inp, list) else [{"role": "user", "content": inp}],
+                system_prompt=None if conv_id else body.get("system_prompt"),
+            )
+        elif path == "/v1/responses":
+            inp = body.get("input")
+            prompt_text = _format_oai_messages_for_agy(
+                inp if isinstance(inp, list) else [{"role": "user", "content": inp}],
+                system_prompt=None if conv_id else body.get("instructions"),
+            )
+        elif path == "/v1/messages":
+            prompt_text = _format_oai_messages_for_agy(
+                body.get("messages") or [],
+                system_prompt=body.get("system"),
+            )
+        else:
+            prompt_text = _format_oai_messages_for_agy(body.get("messages") or [])
+
+        if not prompt_text.strip():
+            self._send_json(400, {"error": {"message": "Empty prompt in request", "type": "invalid_request"}}, extra_headers=extra_headers)
+            return
+
+        stream = bool(body.get("stream"))
+        timeout_s = max(30, min(600, int(body.get("timeout_s") or 300)))
+        req_model_name = body.get("model") or res.get("alias") or res["resolved"]
+        argv = list(agy_cmd) + [
+            "-p",
+            prompt_text,
+            "--model",
+            res["resolved"],
+            "--mode",
+            "auto",
+            "--dangerously-skip-permissions",
+            "--disable-slash-commands",
+            "--output-format",
+            "stream-json" if stream else "json",
+            "--print-timeout",
+            f"{timeout_s}s",
+        ]
+        if conv_id:
+            argv.extend(["--conversation", conv_id])
+
+        work_cwd = self._resolve_agy_cwd(body)
+        t0 = time.monotonic()
+
+        if stream:
+            self._handle_agy_stream(path, argv, work_cwd, body, res, req_model_name, extra_headers, t0)
+            return
+
+        try:
+            r = subprocess.run(
+                argv,
+                stdin=subprocess.DEVNULL,
+                cwd=work_cwd,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=timeout_s + 15,
+            )
+        except Exception as exc:
+            self._send_json(502, {"error": {"message": f"Gemini Pro agy CLI error: {exc}", "type": "bad_gateway"}}, extra_headers=extra_headers)
+            return
+
+        obj = {}
+        for line in reversed((r.stdout or "").splitlines()):
+            s = line.strip()
+            if s.startswith("{"):
+                try:
+                    obj = json.loads(s)
+                    break
+                except Exception:
+                    continue
+
+        if r.returncode != 0 or obj.get("status") == "ERROR":
+            err_msg = obj.get("error") or (r.stderr or r.stdout or f"agy exited {r.returncode}").strip()
+            self._send_json(502, {"error": {"message": f"Gemini Pro error: {err_msg}", "type": "bad_gateway"}}, extra_headers=extra_headers)
+            return
+
+        elapsed = max(0.001, time.monotonic() - t0)
+        new_conv = obj.get("conversation_id") or conv_id
+        rid = f"resp_agy_{new_conv}" if new_conv else f"resp_agy_{int(time.time() * 1000)}_{os.urandom(3).hex()}"
+        resp_text = str(obj.get("response") or "").strip()
+        usage = obj.get("usage") or {}
+        in_toks = int(usage.get("input_tokens") or 0)
+        out_toks = int(usage.get("output_tokens") or max(1, len(resp_text.split())))
+        tot_toks = int(usage.get("total_tokens") or (in_toks + out_toks))
+
+        if body.get("store", True):
+            self.router.record_cloud_session(
+                rid,
+                res["resolved"],
+                res.get("alias"),
+                [],
+                cloud="gemini-pro",
+                conversation_id=new_conv,
+            )
+
+        if path == "/api/v1/chat":
+            self._send_json(
+                200,
+                {
+                    "response_id": rid,
+                    "model_instance_id": res["resolved"],
+                    "conversation_id": new_conv,
+                    "output": [{"type": "message", "content": resp_text}],
+                    "stats": {
+                        "tokens_per_second": round(out_toks / elapsed, 2),
+                        "completion_tokens": out_toks,
+                        "prompt_tokens": in_toks,
+                    },
+                },
+                extra_headers=extra_headers,
+            )
+            return
+
+        if path == "/v1/responses":
+            self._send_json(
+                200,
+                {
+                    "id": rid,
+                    "object": "response",
+                    "created_at": int(time.time()),
+                    "model": req_model_name,
+                    "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": resp_text}]}],
+                    "output_text": resp_text,
+                    "usage": {"input_tokens": in_toks, "output_tokens": out_toks, "total_tokens": tot_toks},
+                },
+                extra_headers=extra_headers,
+            )
+            return
+
+        if path == "/v1/messages":
+            self._send_json(
+                200,
+                {
+                    "id": rid,
+                    "type": "message",
+                    "role": "assistant",
+                    "model": req_model_name,
+                    "content": [{"type": "text", "text": resp_text}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": in_toks, "output_tokens": out_toks},
+                },
+                extra_headers=extra_headers,
+            )
+            return
+
+        self._send_json(
+            200,
+            {
+                "id": f"chatcmpl_agy_{os.urandom(4).hex()}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": req_model_name,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": resp_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": in_toks, "completion_tokens": out_toks, "total_tokens": tot_toks},
+            },
+            extra_headers=extra_headers,
+        )
+
+    def _handle_agy_stream(self, path, argv, work_cwd, body, res, req_model_name, extra_headers, t0):
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=work_cwd,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+        except Exception as exc:
+            self._send_json(502, {"error": {"message": f"Gemini Pro agy stream launch failed: {exc}", "type": "bad_gateway"}}, extra_headers=extra_headers)
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Transfer-Encoding", "chunked")
+        self._send_cors_headers()
+        for k, v in extra_headers.items():
+            if v:
+                self.send_header(k, v)
+        self.end_headers()
+
+        chat_id = f"chatcmpl_agy_{os.urandom(4).hex()}"
+        created_ts = int(time.time())
+        is_native = (path == "/api/v1/chat")
+        sent_role = False
+        text_parts = []
+        reason_parts = []
+        new_conv = ""
+        ttft = None
+        result_obj = {}
+
+        def _emit_oai_delta(delta_dict, finish_reason=None, usage=None):
+            payload = {
+                "id": chat_id,
+                "object": "chat.completion.chunk",
+                "created": created_ts,
+                "model": req_model_name,
+                "choices": [{"index": 0, "delta": delta_dict, "finish_reason": finish_reason}],
+            }
+            if usage is not None:
+                payload["usage"] = usage
+            self._write_http_chunk(f"data: {json.dumps(payload)}\n\n".encode("utf-8"))
+
+        def _emit_native_ev(ev_name, data_obj):
+            self._write_http_chunk(f"event: {ev_name}\ndata: {json.dumps(data_obj)}\n\n".encode("utf-8"))
+
+        try:
+            assert proc.stdout is not None
+            for raw_line in proc.stdout:
+                s = raw_line.strip()
+                if not s.startswith("{"):
+                    continue
+                try:
+                    ev = json.loads(s)
+                except Exception:
+                    continue
+                ev_kind = ev.get("event")
+                if ev.get("conversation_id"):
+                    new_conv = ev["conversation_id"]
+                if ev_kind == "step_update":
+                    su = ev.get("step_update") or {}
+                    if su.get("conversation_id"):
+                        new_conv = su["conversation_id"]
+                    t_delta = su.get("text_delta") or ""
+                    r_delta = su.get("thinking_delta") or su.get("reasoning_delta") or ""
+                    if (t_delta or r_delta) and ttft is None:
+                        ttft = time.monotonic() - t0
+                    if r_delta:
+                        reason_parts.append(r_delta)
+                        if is_native:
+                            _emit_native_ev("reasoning.delta", {"type": "reasoning.delta", "content": r_delta})
+                        else:
+                            d = {"reasoning_content": r_delta}
+                            if not sent_role:
+                                d["role"] = "assistant"
+                                sent_role = True
+                            _emit_oai_delta(d)
+                    if t_delta:
+                        text_parts.append(t_delta)
+                        if is_native:
+                            _emit_native_ev("message.delta", {"type": "message.delta", "content": t_delta})
+                        else:
+                            d = {"content": t_delta}
+                            if not sent_role:
+                                d["role"] = "assistant"
+                                sent_role = True
+                            _emit_oai_delta(d)
+                elif ev_kind == "result":
+                    result_obj = ev.get("result") or {}
+                    if result_obj.get("conversation_id"):
+                        new_conv = result_obj["conversation_id"]
+
+            proc.wait(timeout=10)
+            final_resp = str(result_obj.get("response") or "")
+            if not text_parts and final_resp:
+                text_parts.append(final_resp)
+                if is_native:
+                    _emit_native_ev("message.delta", {"type": "message.delta", "content": final_resp})
+                else:
+                    d = {"content": final_resp}
+                    if not sent_role:
+                        d["role"] = "assistant"
+                        sent_role = True
+                    _emit_oai_delta(d)
+            elif not text_parts and result_obj.get("status") == "ERROR":
+                err_txt = f"[Gemini Pro error: {result_obj.get('error') or 'unknown error'}]"
+                text_parts.append(err_txt)
+                if is_native:
+                    _emit_native_ev("message.delta", {"type": "message.delta", "content": err_txt})
+                else:
+                    _emit_oai_delta({"role": "assistant", "content": err_txt})
+
+            elapsed = max(0.001, time.monotonic() - t0)
+            usage = result_obj.get("usage") or {}
+            in_toks = int(usage.get("input_tokens") or 0)
+            out_toks = int(usage.get("output_tokens") or max(1, len("".join(text_parts).split())))
+            tot_toks = int(usage.get("total_tokens") or (in_toks + out_toks))
+            rid = f"resp_agy_{new_conv}" if new_conv else f"resp_agy_{int(time.time() * 1000)}_{os.urandom(3).hex()}"
+
+            if body.get("store", True):
+                self.router.record_cloud_session(
+                    rid,
+                    res["resolved"],
+                    res.get("alias"),
+                    [],
+                    cloud="gemini-pro",
+                    conversation_id=new_conv,
+                )
+
+            if is_native:
+                _emit_native_ev(
+                    "chat.end",
+                    {
+                        "type": "chat.end",
+                        "result": {
+                            "response_id": rid,
+                            "conversation_id": new_conv,
+                            "model_instance_id": res["resolved"],
+                            "stats": {
+                                "tokens_per_second": round(out_toks / elapsed, 2),
+                                "time_to_first_token_seconds": round(ttft or elapsed, 3),
+                            },
+                        },
+                    },
+                )
+            else:
+                _emit_oai_delta({}, finish_reason="stop", usage={"prompt_tokens": in_toks, "completion_tokens": out_toks, "total_tokens": tot_toks})
+                self._write_http_chunk(b"data: [DONE]\n\n")
+
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        finally:
+            if proc and proc.poll() is None:
+                try:
+                    proc.terminate()
                 except Exception:
                     pass
 
