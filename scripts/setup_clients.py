@@ -30,32 +30,25 @@ import install_continue  # noqa: E402
 
 CLIENT_MODELS = [
     {"id": "cluster/code", "name": "Cluster Code (30B MoE -> 14B)", "ctx": 16384, "out": 4096, "tools": True, "vision": False},
-    {"id": "cluster/code-fast", "name": "Cluster Code Fast (14B 72 tok/s)", "ctx": 12288, "out": 4096, "tools": True, "vision": False},
-    {"id": "cluster/code-heavy", "name": "Cluster Code Heavy (30B-A3B MoE)", "ctx": 16384, "out": 4096, "tools": True, "vision": False},
-    {"id": "cluster/agent-heavy", "name": "Cluster Agent Heavy (30B-A3B MoE)", "ctx": 16384, "out": 4096, "tools": True, "vision": False},
     {"id": "cluster/fast-agent", "name": "Cluster Fast Agent (8B 130 tok/s)", "ctx": 16384, "out": 4096, "tools": True, "vision": False},
-    {"id": "cluster/vision", "name": "Cluster Vision (Gemma-4-12B MTP-4)", "ctx": 16384, "out": 4096, "tools": True, "vision": True},
-    {"id": "cluster/vision-heavy", "name": "Cluster Vision Heavy (26B 32K MTP-3)", "ctx": 32768, "out": 4096, "tools": True, "vision": True},
+    {"id": "cluster/vision-heavy", "name": "Cluster Vision Heavy (26B 32K)", "ctx": 32768, "out": 4096, "tools": True, "vision": True},
     {"id": "cluster/reasoning", "name": "Cluster Reasoning (R1-14B Think)", "ctx": 8192, "out": 4096, "tools": True, "vision": False},
     {"id": "cluster/math", "name": "Cluster Math (Phi-4 14B)", "ctx": 8192, "out": 4096, "tools": False, "vision": False},
 ]
 
 # NVIDIA NIM cloud resources via the Cluster Router Gateway (:1235), gated on the NVIDIA NIM API key.
 NIM_CLIENT_MODELS = [
-    {"id": "nim/ultra", "upstream_id": "nvidia/nemotron-3-ultra-550b-a55b", "name": "NVIDIA NIM Ultra (Nemotron-3 550B-A55B Cloud Orchestrator)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
-    {"id": "nim/fast", "upstream_id": "nvidia/nemotron-3.5-lightning-30b-a3b", "name": "NVIDIA NIM Fast (Nemotron-3.5 Lightning 30B-A3B Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
-    {"id": "nim/vision", "upstream_id": "nvidia/nemotron-3.5-super-vl-120b-a12b", "name": "NVIDIA NIM Vision (Nemotron-3.5 Super-VL 120B-A12B Cloud VL)", "ctx": 131072, "out": 8192, "tools": True, "vision": True},
-    {"id": "nim/reasoning", "upstream_id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "name": "NVIDIA NIM Reasoning (Nemotron-3 Nano Omni 30B-A3B Cloud CoT)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
-    {"id": "nim/code", "upstream_id": "poolside/laguna-xs-2.1", "name": "NVIDIA NIM Code (Poolside Laguna-XS 2.1 Cloud Coder)", "ctx": 65536, "out": 8192, "tools": True, "vision": False},
-    {"id": "nim/mistral-large", "upstream_id": "mistralai/mistral-large-4-1t-a52b", "name": "NVIDIA NIM Mistral Large (Mistral Large 4 1T-A52B Cloud)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
-    {"id": "nim/kimi", "upstream_id": "moonshotai/kimi-k3.1-pro", "name": "NVIDIA NIM Kimi (Moonshot K3.1 Pro Long-Context Cloud)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
-    {"id": "nim/step", "upstream_id": "stepfun-ai/step-5-preview", "name": "NVIDIA NIM Step-5 Preview (Frontier Reasoning Cloud)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
-    {"id": "nim/glm-flash", "upstream_id": "z-ai/glm-5.3-flash", "name": "NVIDIA NIM GLM-5.3 Flash (Coding/Tool-Calling Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
-    {"id": "nim/minimax-flash", "upstream_id": "minimaxai/minimax-m3.1-flash", "name": "NVIDIA NIM MiniMax M3.1 Flash (Long-Context Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
-    {"id": "nim/gemma-31b", "upstream_id": "google/gemma-4-31b-it", "name": "NVIDIA NIM Gemma-4 31B (Instruction/Code Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
-    {"id": "nim/embed", "upstream_id": "nvidia/nemotron-3.5-embed-8b", "name": "NVIDIA NIM Embed (Nemotron-3.5 8B Cloud Embeddings)", "ctx": 8192, "out": 0, "tools": False, "vision": False},
+    {"id": "nim/ultra", "upstream_id": "nvidia/nemotron-3-ultra-550b-a55b", "name": "NIM Ultra (550B Cloud Orchestrator)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
+    {"id": "nim/fast", "upstream_id": "nvidia/nemotron-3.5-lightning-30b-a3b", "name": "NIM Fast (30B Cloud Lightning)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
+    {"id": "nim/code", "upstream_id": "poolside/laguna-xs-2.1", "name": "NIM Code (Laguna-XS Cloud Coder)", "ctx": 65536, "out": 8192, "tools": True, "vision": False},
+    {"id": "nim/vision", "upstream_id": "nvidia/nemotron-3.5-super-vl-120b-a12b", "name": "NIM Vision (120B Cloud VL)", "ctx": 131072, "out": 8192, "tools": True, "vision": True},
+    {"id": "nim/reasoning", "upstream_id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "name": "NIM Reasoning (30B Cloud CoT)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
 ]
-NIM_CHAT_MODELS = [m for m in NIM_CLIENT_MODELS if m.get("out", 0) > 0]
+NIM_CHAT_MODELS = list(NIM_CLIENT_MODELS)
+
+# Built-in / auto-discovered / legacy OpenCode providers hidden so OpenCode presents pure Cluster Mode.
+DENIED_OPENCODE_PROVIDERS = ("lmstudio", "ollama", "opencode", "nvidia", "nvidia-nim", "sglang")
+LEGACY_OPENCODE_PROVIDER_KEYS = ("nvidia", "nvidia-nim", "lmstudio", "sglang", "ollama")
 
 NIM_OPENAI_BASE = "https://integrate.api.nvidia.com/v1"
 NIM_OPENAI_BASE_CHAT = NIM_OPENAI_BASE + "/chat/completions"
@@ -106,24 +99,60 @@ def setup_opencode(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             if not os.path.isfile(oc_cfg):
                 continue
             data = inst.load_json_safe(oc_cfg, {})
+            changed = False
             prov = data.get("provider")
             if isinstance(prov, dict):
-                removed = False
                 for key_name in ("cluster", "nvidia-nim"):
                     if key_name in prov:
                         print(f"[{os_tag}:opencode] remove provider.{key_name} from {oc_cfg}")
                         del prov[key_name]
-                        removed = True
-                if removed:
-                    if not prov:
-                        data.pop("provider", None)
-                    inst.write_json_atomic(oc_cfg, data, dry_run=dry_run)
+                        changed = True
+                if not prov:
+                    data.pop("provider", None)
+            if isinstance(data.get("policies"), list):
+                kept = [
+                    pol for pol in data["policies"]
+                    if not (
+                        isinstance(pol, dict)
+                        and pol.get("action") == "provider.use"
+                        and pol.get("effect") == "deny"
+                        and pol.get("resource") in DENIED_OPENCODE_PROVIDERS
+                    )
+                ]
+                if len(kept) != len(data["policies"]):
+                    changed = True
+                    if kept:
+                        data["policies"] = kept
+                    else:
+                        data.pop("policies", None)
+            if data.get("model") == "cluster/code":
+                data.pop("model", None)
+                changed = True
+            if changed:
+                inst.write_json_atomic(oc_cfg, data, dry_run=dry_run)
             continue
 
-        print(f"[{os_tag}:opencode] merge provider.cluster (+ nvidia-nim when NVIDIA NIM key present) -> {oc_cfg} ({v1_url})")
+        print(f"[{os_tag}:opencode] enforce unified 10-model Cluster Mode (hide raw/free providers) -> {oc_cfg} ({v1_url})")
         data = inst.load_json_safe(oc_cfg, {})
+
+        # Clean up pre-existing legacy v2 `providers` & duplicate `provider` entries on PC/Laptop.
+        data.pop("disabled_providers", None)
+        data.pop("enabled_providers", None)
+        legacy_provs = data.get("providers")
+        if isinstance(legacy_provs, dict):
+            for lk in LEGACY_OPENCODE_PROVIDER_KEYS:
+                legacy_provs.pop(lk, None)
+            if not legacy_provs:
+                data.pop("providers", None)
+
         if not isinstance(data.get("provider"), dict):
             data["provider"] = {}
+        for lk in LEGACY_OPENCODE_PROVIDER_KEYS:
+            data["provider"].pop(lk, None)
+
+        cur_model = str(data.get("model") or "").strip()
+        if not cur_model or cur_model.startswith(("lmstudio/", "ollama/", "nvidia/", "nvidia-nim/", "sglang/", "opencode/")):
+            data["model"] = "cluster/code"
 
         def _oc_entry(m, model_id=None):
             entry = {
@@ -141,9 +170,14 @@ def setup_opencode(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             short_id = m["id"].split("/", 1)[1] if m["id"].startswith("cluster/") else m["id"]
             models_map[short_id] = _oc_entry(m)
 
+        nim_key = cluster_lib.resolve_nvidia_api_key()
+        if nim_key:
+            for m in NIM_CHAT_MODELS:
+                models_map[m["id"]] = _oc_entry(m)
+
         data["provider"]["cluster"] = {
             "npm": "@ai-sdk/openai-compatible",
-            "name": "Local Cluster (Torre + Portatil)",
+            "name": "Cluster (Local + NIM)",
             "options": {
                 "baseURL": v1_url,
                 "apiKey": "local-cluster",
@@ -151,22 +185,19 @@ def setup_opencode(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             "models": models_map,
         }
 
-        nim_key = cluster_lib.resolve_nvidia_api_key()
-        if nim_key:
-            for m in NIM_CHAT_MODELS:
-                models_map[m["id"]] = _oc_entry(m)
-            data["provider"]["nvidia-nim"] = {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "NVIDIA NIM Cloud (Torre + Portatil)",
-                "options": {
-                    "baseURL": NIM_OPENAI_BASE,
-                    "apiKey": nim_key,
-                },
-                "models": {
-                    m["id"].split("/", 1)[1]: _oc_entry(m, model_id=m["upstream_id"])
-                    for m in NIM_CHAT_MODELS
-                },
-            }
+        existing_policies = data.get("policies") if isinstance(data.get("policies"), list) else []
+        cleaned_policies = [
+            pol for pol in existing_policies
+            if not (
+                isinstance(pol, dict)
+                and pol.get("action") == "provider.use"
+                and pol.get("resource") in DENIED_OPENCODE_PROVIDERS
+            )
+        ]
+        for prov_id in DENIED_OPENCODE_PROVIDERS:
+            cleaned_policies.append({"action": "provider.use", "resource": prov_id, "effect": "deny"})
+        data["policies"] = cleaned_policies
+
         inst.write_json_atomic(oc_cfg, data, dry_run=dry_run)
     _reload_opencode(ctx, os_tag, dry_run=dry_run)
 
@@ -236,19 +267,22 @@ def setup_vscode_byok(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         if not isinstance(arr, list):
             arr = []
 
-        # Drop empty stub named 'lmstudio' (id == '') or previous cluster entries, preserving all real providers.
+        # Drop empty stub entries ('lmstudio', 'NVIDIA NIM', 'OpenRouter') or previous cluster entries, preserving real providers.
         cleaned = []
         for item in arr:
             if not isinstance(item, dict):
                 continue
-            if item.get("name") in (provider_name, "NVIDIA NIM Cloud"):
+            item_name = item.get("name")
+            if item_name in (provider_name, "NVIDIA NIM Cloud", "Cluster (Local + NIM)"):
                 continue
-            if item.get("name") == "lmstudio" and item.get("vendor") == "customendpoint":
-                ms = item.get("models") or []
-                if len(ms) == 1 and not (ms[0].get("id") or "").strip() and not (ms[0].get("url") or "").strip():
+            ms = item.get("models") or []
+            if item_name in ("lmstudio", "NVIDIA NIM", "OpenRouter"):
+                if not ms or (len(ms) == 1 and not (ms[0].get("id") or "").strip() and not (ms[0].get("url") or "").strip()):
                     continue
             cleaned.append(item)
 
+        nim_key = cluster_lib.resolve_nvidia_api_key()
+        byok_models = CLIENT_MODELS + (NIM_CHAT_MODELS if nim_key else [])
         cluster_entry = {
             "name": provider_name,
             "vendor": "customendpoint",
@@ -264,31 +298,10 @@ def setup_vscode_byok(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
                     "maxInputTokens": m["ctx"],
                     "maxOutputTokens": m["out"],
                 }
-                for m in CLIENT_MODELS + NIM_CHAT_MODELS
+                for m in byok_models
             ],
         }
         cleaned.append(cluster_entry)
-
-        nim_key = cluster_lib.resolve_nvidia_api_key()
-        if nim_key:
-            cleaned.append({
-                "name": "NVIDIA NIM Cloud",
-                "vendor": "customendpoint",
-                "apiKey": nim_key,
-                "apiType": "chat-completions",
-                "models": [
-                    {
-                        "id": m["upstream_id"],
-                        "name": m["name"],
-                        "url": NIM_OPENAI_BASE_CHAT,
-                        "toolCalling": m["tools"],
-                        "vision": m["vision"],
-                        "maxInputTokens": m["ctx"],
-                        "maxOutputTokens": m["out"],
-                    }
-                    for m in NIM_CHAT_MODELS
-                ],
-            })
         inst.write_json_atomic(path, cleaned, dry_run=dry_run)
 
 

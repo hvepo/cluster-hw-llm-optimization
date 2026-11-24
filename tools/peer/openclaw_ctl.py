@@ -405,87 +405,52 @@ def configure_openclaw(cfg=None, config_path=None):
                 "maxTokens": 2048,
             },
             {
+                "id": "cluster/math",
+                "name": "Cluster Math (Phi-4 14B)",
+                "api": "openai-completions",
+                "contextWindow": 8192,
+                "maxTokens": 4096,
+            },
+            {
                 "id": "nim/ultra",
-                "name": "NVIDIA NIM Ultra (Nemotron-3 550B-A55B Cloud Orchestrator)",
+                "name": "NIM Ultra (550B Cloud Orchestrator)",
                 "api": "openai-completions",
                 "contextWindow": 131072,
                 "maxTokens": 16384,
             },
             {
                 "id": "nim/fast",
-                "name": "NVIDIA NIM Fast (Nemotron-3.5 30B-A3B Cloud Lightning)",
-                "api": "openai-completions",
-                "contextWindow": 131072,
-                "maxTokens": 8192,
-            },
-            {
-                "id": "nim/vision",
-                "name": "NVIDIA NIM Vision (Nemotron-3.5 120B-A12B Cloud VL)",
-                "api": "openai-completions",
-                "contextWindow": 131072,
-                "maxTokens": 8192,
-            },
-            {
-                "id": "nim/reasoning",
-                "name": "NVIDIA NIM Reasoning (Nemotron-3 30B-A3B Cloud CoT)",
+                "name": "NIM Fast (30B Cloud Lightning)",
                 "api": "openai-completions",
                 "contextWindow": 131072,
                 "maxTokens": 8192,
             },
             {
                 "id": "nim/code",
-                "name": "NVIDIA NIM Code (Poolside Laguna-XS Cloud Coder)",
+                "name": "NIM Code (Laguna-XS Cloud Coder)",
                 "api": "openai-completions",
                 "contextWindow": 65536,
+                "maxTokens": 8192,
+            },
+            {
+                "id": "nim/vision",
+                "name": "NIM Vision (120B Cloud VL)",
+                "api": "openai-completions",
+                "contextWindow": 131072,
+                "maxTokens": 8192,
+            },
+            {
+                "id": "nim/reasoning",
+                "name": "NIM Reasoning (30B Cloud CoT)",
+                "api": "openai-completions",
+                "contextWindow": 131072,
                 "maxTokens": 8192,
             },
         ],
     }
 
-    nv_key = cluster_lib.resolve_nvidia_api_key(cfg)
-    if nv_key:
-        providers["nvidia-nim"] = {
-            "baseUrl": "https://integrate.api.nvidia.com/v1",
-            "apiKey": nv_key,
-            "api": "openai-completions",
-            "models": [
-                {
-                    "id": "nvidia/nemotron-3-ultra-550b-a55b",
-                    "name": "NVIDIA Nemotron-3 Ultra 550B-A55B",
-                    "api": "openai-completions",
-                    "contextWindow": 131072,
-                    "maxTokens": 16384,
-                },
-                {
-                    "id": "nvidia/nemotron-3.5-lightning-30b-a3b",
-                    "name": "NVIDIA Nemotron-3.5 Lightning 30B-A3B",
-                    "api": "openai-completions",
-                    "contextWindow": 131072,
-                    "maxTokens": 8192,
-                },
-                {
-                    "id": "nvidia/nemotron-3.5-super-vl-120b-a12b",
-                    "name": "NVIDIA Nemotron-3.5 Super-VL 120B-A12B",
-                    "api": "openai-completions",
-                    "contextWindow": 131072,
-                    "maxTokens": 8192,
-                },
-                {
-                    "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-                    "name": "NVIDIA Nemotron-3 Nano Omni 30B-A3B Reasoning",
-                    "api": "openai-completions",
-                    "contextWindow": 131072,
-                    "maxTokens": 8192,
-                },
-                {
-                    "id": "poolside/laguna-xs-2.1",
-                    "name": "Poolside Laguna-XS 2.1",
-                    "api": "openai-completions",
-                    "contextWindow": 65536,
-                    "maxTokens": 8192,
-                },
-            ],
-        }
+    # Remove duplicate standalone nvidia-nim provider; all 10 curated local+NIM models route cleanly through :1235
+    providers.pop("nvidia-nim", None)
 
     agents_sec = data.setdefault("agents", {})
     defaults = agents_sec.setdefault("defaults", {})

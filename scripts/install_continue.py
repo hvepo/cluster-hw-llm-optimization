@@ -32,38 +32,14 @@ CONTINUE_MODEL_SPECS = {
         "roles": ["chat", "edit", "apply"],
         "capabilities": ["tool_use"],
     },
-    "cluster/code-fast": {
-        "name": "Cluster Code Fast (14B 72 tok/s)",
-        "ctx": 12288,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "cluster/code-heavy": {
-        "name": "Cluster Code Heavy (30B-A3B MoE)",
-        "ctx": 16384,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "cluster/agent-heavy": {
-        "name": "Cluster Agent Heavy (30B-A3B MoE)",
-        "ctx": 16384,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
     "cluster/fast-agent": {
         "name": "Cluster Fast Agent (8B 130 tok/s)",
         "ctx": 16384,
         "roles": ["chat", "edit", "apply"],
         "capabilities": ["tool_use"],
     },
-    "cluster/vision": {
-        "name": "Cluster Vision (Gemma-4-12B MTP-4)",
-        "ctx": 16384,
-        "roles": ["chat"],
-        "capabilities": ["tool_use", "image_input"],
-    },
     "cluster/vision-heavy": {
-        "name": "Cluster Vision Heavy (26B 32K MTP-3)",
+        "name": "Cluster Vision Heavy (26B 32K)",
         "ctx": 32768,
         "roles": ["chat"],
         "capabilities": ["tool_use", "image_input"],
@@ -80,6 +56,36 @@ CONTINUE_MODEL_SPECS = {
         "roles": ["chat"],
         "capabilities": [],
     },
+    "nim/ultra": {
+        "name": "NIM Ultra (550B Cloud Orchestrator)",
+        "ctx": 131072,
+        "roles": ["chat", "edit", "apply"],
+        "capabilities": ["tool_use"],
+    },
+    "nim/fast": {
+        "name": "NIM Fast (30B Cloud Lightning)",
+        "ctx": 131072,
+        "roles": ["chat", "edit", "apply"],
+        "capabilities": ["tool_use"],
+    },
+    "nim/code": {
+        "name": "NIM Code (Laguna-XS Cloud Coder)",
+        "ctx": 65536,
+        "roles": ["chat", "edit", "apply"],
+        "capabilities": ["tool_use"],
+    },
+    "nim/vision": {
+        "name": "NIM Vision (120B Cloud VL)",
+        "ctx": 131072,
+        "roles": ["chat"],
+        "capabilities": ["tool_use", "image_input"],
+    },
+    "nim/reasoning": {
+        "name": "NIM Reasoning (30B Cloud CoT)",
+        "ctx": 131072,
+        "roles": ["chat"],
+        "capabilities": ["tool_use"],
+    },
     "cluster/autocomplete": {
         "name": "Cluster Tab Autocomplete",
         "ctx": 4096,
@@ -94,127 +100,23 @@ CONTINUE_MODEL_SPECS = {
     },
 }
 
-# NVIDIA NIM cloud resources via the Cluster Router Gateway (:1235); visible when the
-# NVIDIA NIM API key is present (mirrors gateway NIM_ALIAS_SPECS context/output windows).
-NIM_CONTINUE_SPECS = {
-    "nim/ultra": {
-        "name": "NVIDIA NIM Ultra (Nemotron-3 550B-A55B Cloud Orchestrator)",
-        "ctx": 131072,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "nim/fast": {
-        "name": "NVIDIA NIM Fast (Nemotron-3.5 Lightning 30B-A3B Cloud)",
-        "ctx": 131072,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "nim/vision": {
-        "name": "NVIDIA NIM Vision (Nemotron-3.5 Super-VL 120B-A12B Cloud VL)",
-        "ctx": 131072,
-        "roles": ["chat"],
-        "capabilities": ["tool_use", "image_input"],
-    },
-    "nim/reasoning": {
-        "name": "NVIDIA NIM Reasoning (Nemotron-3 Nano Omni 30B-A3B Cloud CoT)",
-        "ctx": 131072,
-        "roles": ["chat"],
-        "capabilities": ["tool_use"],
-    },
-    "nim/code": {
-        "name": "NVIDIA NIM Code (Poolside Laguna-XS 2.1 Cloud Coder)",
-        "ctx": 65536,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "nim/mistral-large": {
-        "name": "NVIDIA NIM Mistral Large (Mistral Large 4 1T-A52B Frontier Cloud)",
-        "ctx": 131072,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "nim/kimi": {
-        "name": "NVIDIA NIM Kimi (Moonshot K3.1 Pro Long-Context Cloud)",
-        "ctx": 131072,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "nim/step": {
-        "name": "NVIDIA NIM Step-5 Preview (Frontier Reasoning Cloud)",
-        "ctx": 131072,
-        "roles": ["chat"],
-        "capabilities": ["tool_use"],
-    },
-    "nim/glm-flash": {
-        "name": "NVIDIA NIM GLM-5.3 Flash (High-Speed Coding/Tool-Calling Cloud)",
-        "ctx": 131072,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "nim/minimax-flash": {
-        "name": "NVIDIA NIM MiniMax M3.1 Flash (High-Speed Long-Context Cloud)",
-        "ctx": 131072,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "nim/gemma-31b": {
-        "name": "NVIDIA NIM Gemma-4 31B (Instruction/Code Cloud)",
-        "ctx": 131072,
-        "roles": ["chat", "edit", "apply"],
-        "capabilities": ["tool_use"],
-    },
-    "nim/embed": {
-        "name": "NVIDIA NIM Embed (Nemotron-3.5 8B Cloud Embeddings)",
-        "ctx": 8192,
-        "roles": ["embed"],
-        "capabilities": [],
-    },
-}
-
-CONTINUE_MODEL_SPECS.update(NIM_CONTINUE_SPECS)
-
-NIM_ORDER = [
+CURATED_ORDER = [
+    "cluster/code",
+    "cluster/fast-agent",
+    "cluster/vision-heavy",
+    "cluster/reasoning",
+    "cluster/math",
     "nim/ultra",
     "nim/fast",
+    "nim/code",
     "nim/vision",
     "nim/reasoning",
-    "nim/code",
-    "nim/mistral-large",
-    "nim/kimi",
-    "nim/step",
-    "nim/glm-flash",
-    "nim/minimax-flash",
-    "nim/gemma-31b",
-    "nim/embed",
+    "cluster/autocomplete",
+    "cluster/embed",
 ]
 
-TORRE_ORDER = [
-    "cluster/code",
-    "cluster/code-fast",
-    "cluster/fast-agent",
-    "cluster/vision",
-    "cluster/reasoning",
-    "cluster/math",
-    "cluster/code-heavy",
-    "cluster/agent-heavy",
-    "cluster/vision-heavy",
-    "cluster/autocomplete",
-    "cluster/embed",
-] + NIM_ORDER
-
-PORTATIL_ORDER = [
-    "cluster/code",
-    "cluster/code-heavy",
-    "cluster/agent-heavy",
-    "cluster/vision-heavy",
-    "cluster/code-fast",
-    "cluster/fast-agent",
-    "cluster/vision",
-    "cluster/reasoning",
-    "cluster/math",
-    "cluster/autocomplete",
-    "cluster/embed",
-] + NIM_ORDER
+TORRE_ORDER = list(CURATED_ORDER)
+PORTATIL_ORDER = list(CURATED_ORDER)
 
 
 def _backup_if_needed(path, dry_run=False):

@@ -731,10 +731,16 @@ def check_gateway_and_clients():
         os.makedirs(os.path.join(win_home, ".lmstudio"), exist_ok=True)
 
         with open(os.path.join(posix_home, ".config", "opencode", "opencode.json"), "w", encoding="utf-8") as f:
-            json.dump({"mcp": {"servers": {"other-oc": {"type": "local", "command": ["node"]}}}}, f)
+            json.dump({
+                "model": "lmstudio/old-model",
+                "providers": {"nvidia": {"models": {}}, "sglang": {"models": {}}},
+                "mcp": {"servers": {"other-oc": {"type": "local", "command": ["node"]}}},
+            }, f)
         with open(os.path.join(win_app, "Code", "User", "chatLanguageModels.json"), "w", encoding="utf-8") as f:
             json.dump([
                 {"name": "Google", "vendor": "gemini", "apiKey": "${input:keep}"},
+                {"name": "NVIDIA NIM", "vendor": "customendpoint", "models": []},
+                {"name": "OpenRouter", "vendor": "customendpoint", "models": []},
                 {"name": "lmstudio", "vendor": "customendpoint", "models": [{"id": "", "name": "", "url": ""}]},
             ], f)
         with open(os.path.join(win_home, ".lmstudio", "mcp.json"), "w", encoding="utf-8") as f:
@@ -759,21 +765,22 @@ def check_gateway_and_clients():
 
         oc_d = json.load(open(os.path.join(posix_home, ".config", "opencode", "opencode.json"), encoding="utf-8"))
         assert "other-oc" in oc_d["mcp"]["servers"]
+        assert list(oc_d["provider"].keys()) == ["cluster"]
+        assert "providers" not in oc_d
+        assert oc_d.get("model") == "cluster/code"
         assert oc_d["provider"]["cluster"]["options"]["baseURL"] == "http://127.0.0.1:1235/v1"
-        assert "code" in oc_d["provider"]["cluster"]["models"]
+        assert len(oc_d["provider"]["cluster"]["models"]) == 10
         assert oc_d["provider"]["cluster"]["models"]["code"]["id"] == "cluster/code"
-        assert "nim/ultra" in oc_d["provider"]["cluster"]["models"]
-        assert "nim/embed" not in oc_d["provider"]["cluster"]["models"]
-        assert oc_d["provider"]["nvidia-nim"]["models"]["ultra"]["id"] == "nvidia/nemotron-3-ultra-550b-a55b"
-        assert "embed" not in oc_d["provider"]["nvidia-nim"]["models"]
+        assert oc_d["provider"]["cluster"]["models"]["nim/ultra"]["id"] == "nim/ultra"
+        denied = {p["resource"] for p in oc_d.get("policies") or [] if p.get("action") == "provider.use" and p.get("effect") == "deny"}
+        assert {"lmstudio", "ollama", "opencode", "nvidia", "nvidia-nim", "sglang"}.issubset(denied)
 
         byok = json.load(open(os.path.join(win_app, "Code", "User", "chatLanguageModels.json"), encoding="utf-8"))
         names = [x.get("name") for x in byok]
-        assert "Google" in names and "Local Cluster (LM Link)" in names and "NVIDIA NIM Cloud" in names and "lmstudio" not in names
-        nim_byok = next(x for x in byok if x.get("name") == "NVIDIA NIM Cloud")
-        nim_byok_ids = [m.get("id") for m in nim_byok.get("models") or []]
-        assert "nvidia/nemotron-3-ultra-550b-a55b" in nim_byok_ids
-        assert "nim/ultra" not in nim_byok_ids and "nim/embed" not in nim_byok_ids and "nvidia/nemotron-3.5-embed-8b" not in nim_byok_ids
+        assert names == ["Google", "Local Cluster (LM Link)"]
+        byok_cl = next(x for x in byok if x.get("name") == "Local Cluster (LM Link)")
+        byok_ids = [m.get("id") for m in byok_cl.get("models") or []]
+        assert len(byok_ids) == 10 and "cluster/code" in byok_ids and "nim/ultra" in byok_ids
 
         lms_mcp = json.load(open(os.path.join(win_home, ".lmstudio", "mcp.json"), encoding="utf-8"))
         assert "browse" in lms_mcp["mcpServers"] and "cluster-hw-llm" in lms_mcp["mcpServers"]
@@ -808,7 +815,7 @@ def check_gateway_and_clients():
             os.path.join(posix_home, ".continue", "config.yaml"),
         ):
             ptxt = open(cont_p, encoding="utf-8").read()
-            assert "Portatil" in ptxt and "cluster/code-heavy" in ptxt and "mcpServers:" in ptxt
+            assert "Portatil" in ptxt and "cluster/code" in ptxt and "nim/ultra" in ptxt and "mcpServers:" in ptxt
 
         r2 = subprocess.run(
             [sys.executable, setup_script, "--os", "windows,wsl", "--clients", "all", "--uninstall"],
@@ -820,7 +827,7 @@ def check_gateway_and_clients():
             assert not os.path.exists(sp), f"Managed CLI shim was not removed on uninstall: {sp}"
         assert os.path.isfile(custom_bin), "Uninstall removed non-managed user script in ~/.local/bin!"
         oc_d2 = json.load(open(os.path.join(posix_home, ".config", "opencode", "opencode.json"), encoding="utf-8"))
-        assert "other-oc" in oc_d2["mcp"]["servers"] and "provider" not in oc_d2
+        assert "other-oc" in oc_d2["mcp"]["servers"] and "provider" not in oc_d2 and "policies" not in oc_d2
         byok2 = json.load(open(os.path.join(win_app, "Code", "User", "chatLanguageModels.json"), encoding="utf-8"))
         assert [x.get("name") for x in byok2] == ["Google"]
         lms_mcp2 = json.load(open(os.path.join(win_home, ".lmstudio", "mcp.json"), encoding="utf-8"))
