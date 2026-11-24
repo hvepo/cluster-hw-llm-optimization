@@ -39,7 +39,7 @@ ORCHESTRATOR_TOOLS = [
             "description": "Check live reachability of the local and sibling Peer Order Daemons (:1236), agy CLI availability, offline Drive queue counts, and OpenClaw HA leader status.",
             "parameters": {
                 "type": "object",
-                "properties": {"node": {"type": "string", "description": "Optional node filter (e.g. 'torre' or 'portatil')."}},
+                "properties": {"node": {"type": "string", "description": "Optional node filter ('torre', 'portatil', 'raspberrypi', or 'arduq')."}},
                 "additionalProperties": False,
             },
         },
@@ -48,11 +48,11 @@ ORCHESTRATOR_TOOLS = [
         "type": "function",
         "function": {
             "name": "peer_exec",
-            "description": "Run a shell (WSL/Linux bash) or PowerShell (Windows) command on torre or portatil via Tailscale :1236 (with offline queue fallback).",
+            "description": "Run a shell (WSL/Linux bash) or PowerShell (Windows) command on torre, portatil, raspberrypi, or arduq via Tailscale :1236 (with offline queue fallback).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "node": {"type": "string", "description": "Target node ('torre' or 'portatil')."},
+                    "node": {"type": "string", "description": "Target node ('torre', 'portatil', 'raspberrypi', or 'arduq')."},
                     "command": {"type": "string", "description": "Shell or PowerShell command to execute."},
                     "target_os": {"type": "string", "enum": ["auto", "wsl", "windows"], "default": "auto"},
                     "cwd": {"type": "string"},
@@ -69,11 +69,11 @@ ORCHESTRATOR_TOOLS = [
         "type": "function",
         "function": {
             "name": "peer_send_order",
-            "description": "Send an Antigravity order (agy -p) bidirectionally to torre or portatil across WSL, Windows, or auto via Tailscale :1236 (with automatic Google Drive offline queue fallback).",
+            "description": "Send an Antigravity order (agy -p) bidirectionally to torre, portatil, raspberrypi, or arduq across WSL, Windows, or auto via Tailscale :1236 (with automatic Google Drive offline queue fallback).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "node": {"type": "string", "description": "Target cluster node ('torre' or 'portatil')."},
+                    "node": {"type": "string", "description": "Target cluster node ('torre', 'portatil', 'raspberrypi', or 'arduq')."},
                     "prompt": {"type": "string", "description": "Task or order prompt to execute on the target machine."},
                     "target_os": {"type": "string", "enum": ["auto", "wsl", "windows"], "default": "auto"},
                     "mode": {"type": "string", "enum": ["auto", "accept-edits", "plan"], "default": "auto"},
@@ -99,7 +99,7 @@ ORCHESTRATOR_TOOLS = [
                 "type": "object",
                 "properties": {
                     "job_id": {"type": "string"},
-                    "node": {"type": "string", "description": "Target node where the job ran ('torre' or 'portatil')."},
+                    "node": {"type": "string", "description": "Target node where the job ran ('torre', 'portatil', 'raspberrypi', or 'arduq')."},
                 },
                 "required": ["job_id"],
                 "additionalProperties": False,
@@ -322,7 +322,7 @@ def run_orchestrator(prompt, model=ORCH_DEFAULT_MODEL, max_steps=ORCH_DEFAULT_MA
         tool_calls = _normalize_tool_calls(msg)
         if not tool_calls:
             result["ok"] = True
-            result["text"] = (msg.get("content") or "").strip()
+            result["text"] = (msg.get("content") or msg.get("reasoning_content") or "").strip()
             result["steps_executed"] = executed
             result["tool_trace"] = trace
             result["resolved_model"] = resolved
@@ -359,7 +359,7 @@ def run_orchestrator(prompt, model=ORCH_DEFAULT_MODEL, max_steps=ORCH_DEFAULT_MA
         obj = _nim_chat_completion(api_key, nim_model, messages, tools=None, max_tokens=4096)
         choices = obj.get("choices") or []
         msg = choices[0].get("message") or {} if choices else {}
-        text = (msg.get("content") or "").strip()
+        text = (msg.get("content") or msg.get("reasoning_content") or "").strip()
         resolved = obj.get("model") or resolved
     except Exception:
         pass

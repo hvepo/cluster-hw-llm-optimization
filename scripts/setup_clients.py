@@ -42,19 +42,20 @@ CLIENT_MODELS = [
 
 # NVIDIA NIM cloud resources via the Cluster Router Gateway (:1235), gated on the NVIDIA NIM API key.
 NIM_CLIENT_MODELS = [
-    {"id": "nim/ultra", "name": "NVIDIA NIM Ultra (Nemotron-3 550B-A55B Cloud Orchestrator)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
-    {"id": "nim/fast", "name": "NVIDIA NIM Fast (Nemotron-3.5 Lightning 30B-A3B Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
-    {"id": "nim/vision", "name": "NVIDIA NIM Vision (Nemotron-3.5 Super-VL 120B-A12B Cloud VL)", "ctx": 131072, "out": 8192, "tools": True, "vision": True},
-    {"id": "nim/reasoning", "name": "NVIDIA NIM Reasoning (Nemotron-3 Nano Omni 30B-A3B Cloud CoT)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
-    {"id": "nim/code", "name": "NVIDIA NIM Code (Poolside Laguna-XS 2.1 Cloud Coder)", "ctx": 65536, "out": 8192, "tools": True, "vision": False},
-    {"id": "nim/mistral-large", "name": "NVIDIA NIM Mistral Large (Mistral Large 4 1T-A52B Cloud)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
-    {"id": "nim/kimi", "name": "NVIDIA NIM Kimi (Moonshot K3.1 Pro Long-Context Cloud)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
-    {"id": "nim/step", "name": "NVIDIA NIM Step-5 Preview (Frontier Reasoning Cloud)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
-    {"id": "nim/glm-flash", "name": "NVIDIA NIM GLM-5.3 Flash (Coding/Tool-Calling Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
-    {"id": "nim/minimax-flash", "name": "NVIDIA NIM MiniMax M3.1 Flash (Long-Context Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
-    {"id": "nim/gemma-31b", "name": "NVIDIA NIM Gemma-4 31B (Instruction/Code Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
-    {"id": "nim/embed", "name": "NVIDIA NIM Embed (Nemotron-3.5 8B Cloud Embeddings)", "ctx": 8192, "out": 0, "tools": False, "vision": False},
+    {"id": "nim/ultra", "upstream_id": "nvidia/nemotron-3-ultra-550b-a55b", "name": "NVIDIA NIM Ultra (Nemotron-3 550B-A55B Cloud Orchestrator)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
+    {"id": "nim/fast", "upstream_id": "nvidia/nemotron-3.5-lightning-30b-a3b", "name": "NVIDIA NIM Fast (Nemotron-3.5 Lightning 30B-A3B Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
+    {"id": "nim/vision", "upstream_id": "nvidia/nemotron-3.5-super-vl-120b-a12b", "name": "NVIDIA NIM Vision (Nemotron-3.5 Super-VL 120B-A12B Cloud VL)", "ctx": 131072, "out": 8192, "tools": True, "vision": True},
+    {"id": "nim/reasoning", "upstream_id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "name": "NVIDIA NIM Reasoning (Nemotron-3 Nano Omni 30B-A3B Cloud CoT)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
+    {"id": "nim/code", "upstream_id": "poolside/laguna-xs-2.1", "name": "NVIDIA NIM Code (Poolside Laguna-XS 2.1 Cloud Coder)", "ctx": 65536, "out": 8192, "tools": True, "vision": False},
+    {"id": "nim/mistral-large", "upstream_id": "mistralai/mistral-large-4-1t-a52b", "name": "NVIDIA NIM Mistral Large (Mistral Large 4 1T-A52B Cloud)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
+    {"id": "nim/kimi", "upstream_id": "moonshotai/kimi-k3.1-pro", "name": "NVIDIA NIM Kimi (Moonshot K3.1 Pro Long-Context Cloud)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
+    {"id": "nim/step", "upstream_id": "stepfun-ai/step-5-preview", "name": "NVIDIA NIM Step-5 Preview (Frontier Reasoning Cloud)", "ctx": 131072, "out": 16384, "tools": True, "vision": False},
+    {"id": "nim/glm-flash", "upstream_id": "z-ai/glm-5.3-flash", "name": "NVIDIA NIM GLM-5.3 Flash (Coding/Tool-Calling Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
+    {"id": "nim/minimax-flash", "upstream_id": "minimaxai/minimax-m3.1-flash", "name": "NVIDIA NIM MiniMax M3.1 Flash (Long-Context Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
+    {"id": "nim/gemma-31b", "upstream_id": "google/gemma-4-31b-it", "name": "NVIDIA NIM Gemma-4 31B (Instruction/Code Cloud)", "ctx": 131072, "out": 8192, "tools": True, "vision": False},
+    {"id": "nim/embed", "upstream_id": "nvidia/nemotron-3.5-embed-8b", "name": "NVIDIA NIM Embed (Nemotron-3.5 8B Cloud Embeddings)", "ctx": 8192, "out": 0, "tools": False, "vision": False},
 ]
+NIM_CHAT_MODELS = [m for m in NIM_CLIENT_MODELS if m.get("out", 0) > 0]
 
 NIM_OPENAI_BASE = "https://integrate.api.nvidia.com/v1"
 NIM_OPENAI_BASE_CHAT = NIM_OPENAI_BASE + "/chat/completions"
@@ -106,12 +107,17 @@ def setup_opencode(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
                 continue
             data = inst.load_json_safe(oc_cfg, {})
             prov = data.get("provider")
-            if isinstance(prov, dict) and "cluster" in prov:
-                print(f"[{os_tag}:opencode] remove provider.cluster from {oc_cfg}")
-                del prov["cluster"]
-                if not prov:
-                    data.pop("provider", None)
-                inst.write_json_atomic(oc_cfg, data, dry_run=dry_run)
+            if isinstance(prov, dict):
+                removed = False
+                for key_name in ("cluster", "nvidia-nim"):
+                    if key_name in prov:
+                        print(f"[{os_tag}:opencode] remove provider.{key_name} from {oc_cfg}")
+                        del prov[key_name]
+                        removed = True
+                if removed:
+                    if not prov:
+                        data.pop("provider", None)
+                    inst.write_json_atomic(oc_cfg, data, dry_run=dry_run)
             continue
 
         print(f"[{os_tag}:opencode] merge provider.cluster (+ nvidia-nim when NVIDIA NIM key present) -> {oc_cfg} ({v1_url})")
@@ -119,9 +125,9 @@ def setup_opencode(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         if not isinstance(data.get("provider"), dict):
             data["provider"] = {}
 
-        def _oc_entry(m):
+        def _oc_entry(m, model_id=None):
             entry = {
-                "id": m["id"],
+                "id": model_id or m["id"],
                 "name": m["name"],
                 "tool_call": m["tools"],
                 "limit": {"context": m["ctx"], "output": m["out"]},
@@ -147,7 +153,7 @@ def setup_opencode(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
 
         nim_key = cluster_lib.resolve_nvidia_api_key()
         if nim_key:
-            for m in NIM_CLIENT_MODELS:
+            for m in NIM_CHAT_MODELS:
                 models_map[m["id"]] = _oc_entry(m)
             data["provider"]["nvidia-nim"] = {
                 "npm": "@ai-sdk/openai-compatible",
@@ -156,7 +162,10 @@ def setup_opencode(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
                     "baseURL": NIM_OPENAI_BASE,
                     "apiKey": nim_key,
                 },
-                "models": {m["id"]: _oc_entry(m) for m in NIM_CLIENT_MODELS},
+                "models": {
+                    m["id"].split("/", 1)[1]: _oc_entry(m, model_id=m["upstream_id"])
+                    for m in NIM_CHAT_MODELS
+                },
             }
         inst.write_json_atomic(oc_cfg, data, dry_run=dry_run)
 
@@ -188,9 +197,13 @@ def setup_vscode_byok(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             arr = inst.load_json_safe(path, [])
             if not isinstance(arr, list):
                 continue
-            filtered = [item for item in arr if not (isinstance(item, dict) and item.get("name") == provider_name)]
+            filtered = [
+                item
+                for item in arr
+                if not (isinstance(item, dict) and item.get("name") in (provider_name, "NVIDIA NIM Cloud"))
+            ]
             if len(filtered) != len(arr):
-                print(f"[{os_tag}:vscode-byok] remove '{provider_name}' from {path}")
+                print(f"[{os_tag}:vscode-byok] remove '{provider_name}' (+ 'NVIDIA NIM Cloud') from {path}")
                 inst.write_json_atomic(path, filtered, dry_run=dry_run)
             continue
 
@@ -227,7 +240,7 @@ def setup_vscode_byok(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
                     "maxInputTokens": m["ctx"],
                     "maxOutputTokens": m["out"],
                 }
-                for m in CLIENT_MODELS + NIM_CLIENT_MODELS
+                for m in CLIENT_MODELS + NIM_CHAT_MODELS
             ],
         }
         cleaned.append(cluster_entry)
@@ -241,7 +254,7 @@ def setup_vscode_byok(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
                 "apiType": "chat-completions",
                 "models": [
                     {
-                        "id": m["id"],
+                        "id": m["upstream_id"],
                         "name": m["name"],
                         "url": NIM_OPENAI_BASE_CHAT,
                         "toolCalling": m["tools"],
@@ -249,7 +262,7 @@ def setup_vscode_byok(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
                         "maxInputTokens": m["ctx"],
                         "maxOutputTokens": m["out"],
                     }
-                    for m in NIM_CLIENT_MODELS
+                    for m in NIM_CHAT_MODELS
                 ],
             })
         inst.write_json_atomic(path, cleaned, dry_run=dry_run)
@@ -351,7 +364,7 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
             "  if (-not $env:NVIDIA_API_KEY) { Write-Host 'nim-aider: NVIDIA_API_KEY not set' -ForegroundColor Yellow; return 1 }\n"
             "  $env:OPENAI_API_BASE = 'https://integrate.api.nvidia.com/v1'\n"
             "  $env:OPENAI_API_KEY = $env:NVIDIA_API_KEY\n"
-            "  aider --model 'openai/nim/ultra' @args\n"
+            "  aider --model 'openai/nvidia/nemotron-3-ultra-550b-a55b' @args\n"
             "}\n"
             "function use-cluster-openai {\n"
             f"  $env:OPENAI_BASE_URL = '{v1}'\n"
@@ -421,7 +434,7 @@ def setup_shell_helpers(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
         "nim-orchestrate() { cluster-chat --orchestrate --model nim/ultra \"$@\"; }\n"
         "nim-aider() {\n"
         '  if [ -z "$NVIDIA_API_KEY" ]; then echo "nim-aider: NVIDIA_API_KEY not set" >&2; return 1; fi\n'
-        '  OPENAI_API_BASE="https://integrate.api.nvidia.com/v1" OPENAI_API_KEY="$NVIDIA_API_KEY" aider --model "openai/nim/ultra" "$@"\n'
+        '  OPENAI_API_BASE="https://integrate.api.nvidia.com/v1" OPENAI_API_KEY="$NVIDIA_API_KEY" aider --model "openai/nvidia/nemotron-3-ultra-550b-a55b" "$@"\n'
         "}\n"
         "use-cluster-openai() {\n"
         f'  export OPENAI_BASE_URL="{v1}"\n'
@@ -512,7 +525,7 @@ def setup_codex(ctx, os_tag, endpoint, dry_run=False, uninstall=False):
                 'name = "NVIDIA NIM Cloud (Zero Local VRAM)"\n'
                 f'base_url = "{NIM_OPENAI_BASE}"\n'
                 'env_key = "NVIDIA_API_KEY"\n'
-                'wire_api = "responses"\n'
+                'wire_api = "chat"\n'
                 f"{nim_marker_end}\n"
             )
         )

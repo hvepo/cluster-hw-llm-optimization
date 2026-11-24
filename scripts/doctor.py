@@ -749,6 +749,7 @@ def check_gateway_and_clients():
         env["CLUSTER_INSTALL_POSIX_HOME"] = posix_home
         env["CLUSTER_INSTALL_WIN_HOME"] = win_home
         env["CLUSTER_INSTALL_WIN_APPDATA"] = win_app
+        env["NVIDIA_API_KEY"] = "test-dummy-nvidia-key"
 
         r1 = subprocess.run(
             [sys.executable, setup_script, "--os", "windows,wsl", "--clients", "all"],
@@ -761,10 +762,18 @@ def check_gateway_and_clients():
         assert oc_d["provider"]["cluster"]["options"]["baseURL"] == "http://127.0.0.1:1235/v1"
         assert "code" in oc_d["provider"]["cluster"]["models"]
         assert oc_d["provider"]["cluster"]["models"]["code"]["id"] == "cluster/code"
+        assert "nim/ultra" in oc_d["provider"]["cluster"]["models"]
+        assert "nim/embed" not in oc_d["provider"]["cluster"]["models"]
+        assert oc_d["provider"]["nvidia-nim"]["models"]["ultra"]["id"] == "nvidia/nemotron-3-ultra-550b-a55b"
+        assert "embed" not in oc_d["provider"]["nvidia-nim"]["models"]
 
         byok = json.load(open(os.path.join(win_app, "Code", "User", "chatLanguageModels.json"), encoding="utf-8"))
         names = [x.get("name") for x in byok]
-        assert "Google" in names and "Local Cluster (LM Link)" in names and "lmstudio" not in names
+        assert "Google" in names and "Local Cluster (LM Link)" in names and "NVIDIA NIM Cloud" in names and "lmstudio" not in names
+        nim_byok = next(x for x in byok if x.get("name") == "NVIDIA NIM Cloud")
+        nim_byok_ids = [m.get("id") for m in nim_byok.get("models") or []]
+        assert "nvidia/nemotron-3-ultra-550b-a55b" in nim_byok_ids
+        assert "nim/ultra" not in nim_byok_ids and "nim/embed" not in nim_byok_ids and "nvidia/nemotron-3.5-embed-8b" not in nim_byok_ids
 
         lms_mcp = json.load(open(os.path.join(win_home, ".lmstudio", "mcp.json"), encoding="utf-8"))
         assert "browse" in lms_mcp["mcpServers"] and "cluster-hw-llm" in lms_mcp["mcpServers"]
@@ -832,7 +841,50 @@ def check_gateway_and_clients():
     )
     assert agy_h.returncode == 0, f"agy_local_agent --help failed: {agy_h.stderr}"
 
-    print("[PASS] 5-protocol Cluster Gateway (failover, anti-thrash, SSE, /api/v1/chat pin) + MCP + client provisioner verified")
+    # 7. Mocked unit tests for tools/nim_orchestrator.run_orchestrator()
+    sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
+    import nim_orchestrator  # noqa: E402
+    assert "raspberrypi" in json.dumps(nim_orchestrator.ORCHESTRATOR_TOOLS) and "arduq" in json.dumps(nim_orchestrator.ORCHESTRATOR_TOOLS)
+    orig_call = nim_orchestrator._nim_chat_completion
+    orig_resolve_key = nim_orchestrator.cluster_lib.resolve_nvidia_api_key
+    call_seq = []
+
+    def _fake_completion(api_key, model, messages, tools=None, timeout_s=300, max_tokens=8192):
+        call_seq.append((model, len(messages), bool(tools)))
+        if len(call_seq) == 1:
+            return {
+                "model": model,
+                "choices": [{
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {"id": "tc_1", "type": "function", "function": {"name": "peer_status", "arguments": "{}"}},
+                            {"id": "tc_rec", "type": "function", "function": {"name": "cluster_orchestrate", "arguments": "{}"}},
+                        ],
+                    }
+                }],
+            }
+        return {"model": model, "choices": [{"message": {"content": "", "reasoning_content": "ORCH_REASONING_OK"}}]}
+
+    def _fake_exec(name, targs):
+        assert name == "peer_status"
+        return {"nodes": {"torre": {"reachable": True}, "raspberrypi": {"reachable": True}}}
+
+    try:
+        nim_orchestrator.cluster_lib.resolve_nvidia_api_key = lambda cfg=None: "test-dummy-nvidia-key"
+        nim_orchestrator._nim_chat_completion = _fake_completion
+        orch_res = nim_orchestrator.run_orchestrator("check nodes", model="nim/ultra", max_steps=4, tool_executor=_fake_exec)
+        assert orch_res["ok"] is True
+        assert orch_res["resolved_model"] == "nvidia/nemotron-3-ultra-550b-a55b"
+        assert orch_res["steps_executed"] == 2
+        assert orch_res["tool_trace"][0]["tool"] == "peer_status"
+        assert "unknown tool for orchestrator" in orch_res["tool_trace"][1]["result"]
+        assert orch_res["text"] == "ORCH_REASONING_OK"
+    finally:
+        nim_orchestrator._nim_chat_completion = orig_call
+        nim_orchestrator.cluster_lib.resolve_nvidia_api_key = orig_resolve_key
+
+    print("[PASS] 5-protocol Cluster Gateway (failover, anti-thrash, SSE, /api/v1/chat pin) + MCP + client provisioner + NIM orchestrator verified")
 
 
 def check_peer_and_openclaw():
