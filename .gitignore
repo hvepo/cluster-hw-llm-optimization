@@ -2,6 +2,7 @@
 cluster.local.json
 *.local.json
 repo_root.txt
+/.mcp.json
 
 # Benchmark logs, raw ledgers, temporary states, backups
 ledger.jsonl
