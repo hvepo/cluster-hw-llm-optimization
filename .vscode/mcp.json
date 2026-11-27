@@ -1,12 +1,4 @@
 {
   "servers": {
-    "cluster-hw-llm": {
-      "type": "stdio",
-      "command": "python3",
-      "args": ["${workspaceFolder}/mcp/cluster_mcp_server.py"],
-      "env": {
-        "CLUSTER_REPO_ROOT": "${workspaceFolder}"
-      }
-    }
   }
 }
