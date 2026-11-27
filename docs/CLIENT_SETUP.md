@@ -94,6 +94,15 @@ opencode run --model cluster/code "Explain this module"
 # Or pick inside the TUI with /models -> Cluster (Local + NIM + Gemini Pro)
 ```
 
+The repository's OpenCode configuration also registers the direct **Meta Model API**
+provider with `muse-spark-1.3` (standard mode). In OpenCode, use `/connect` and
+select `meta` to store a Meta API key without putting it in the repository. This
+workspace configuration applies only where this repository is available; configure
+credentials separately on each Windows or WSL installation. It does not add Meta
+to the cluster gateway or to other clients. Requests are sent to Meta and may incur
+charges. See Meta's [coding-agent guide](https://dev.meta.ai/docs/coding-agents)
+for other clients and current data-use terms.
+
 ### 2. VS Code Copilot BYOK & Built-in MCP
 `install.py` registers **`cluster-hw-llm`** (15 tools, 6 resources) in `mcp.json` (and re-enables `"chat.disableAIFeatures": false` if disabled), while `setup_clients.py` populates **`Local Cluster (LM Link)`** (`cluster/*` + `nim/*` + `gemini/*`, provisioned with `gateway.token`) in `chatLanguageModels.json` without touching other providers.
 - Open **Copilot Chat** -> Model Picker -> select any `Cluster *`, `NIM *`, or `Gemini *` model and attach `cluster-hw-llm` tools/resources.
